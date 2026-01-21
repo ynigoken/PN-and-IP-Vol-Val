@@ -357,26 +357,49 @@ def country_dialog(country: str):
     st.markdown(f"**Total regulations (rows):** {len(d):,}")
 
     # Show grouped by category
-    for cat in sorted(d["Category"].dropna().unique().tolist()):
-        st.markdown(f"### {cat}")
-        dc = d[d["Category"] == cat].copy()
-        dc["Year_sort"] = dc["Year"].fillna(-1).astype(int)
-        dc = dc.sort_values(["Year_sort", "Regulation_Title"], ascending=[False, True])
+for cat in sorted(d["Category"].dropna().unique().tolist()):
+    st.markdown(f"### {cat}")
 
-        # Build a compact display
-        show = dc[["Year", "Regulation_Title", "Regulator_std", "Source_URL"]].copy()
-        show.rename(columns={"Regulator_std": "Regulator"}, inplace=True)
-        show["Source"] = show["Source_URL"].apply(safe_linkify)
+    dc = d[d["Category"] == cat].copy()
+    dc["Year_sort"] = dc["Year"].fillna(-1).astype(int)
+    dc = dc.sort_values(["Year_sort", "Regulation_Title"], ascending=[False, True])
 
-        # Render with markdown links
-        for _, r in show.iterrows():
-            y = r["Year"]
-            y_txt = str(int(y)) if pd.notna(y) else "—"
-            title = r["Regulation_Title"] if pd.notna(r["Regulation_Title"]) else "—"
-            reg = r["Regulator"] if pd.notna(r["Regulator"]) else "—"
-            src = r["Source"]
-            # one-line summary
-            st.markdown(f"- **{y_txt}** — {title}  \n  *{reg}*  {src}")
+    # Columns we don't want to show as "extra details"
+    internal_cols = {
+        "Category", "Country_std", "Regulator_std", "Year_raw", "Year", "Year_sort",
+        "Regulation_Title", "Source_URL"
+    }
+
+    # Everything else from the sheet row will be shown as details
+    detail_cols = [c for c in dc.columns if c not in internal_cols]
+
+    for i, row in dc.reset_index(drop=True).iterrows():
+        y = row["Year"]
+        y_txt = str(int(y)) if pd.notna(y) else "—"
+        title = row["Regulation_Title"] if pd.notna(row["Regulation_Title"]) else "—"
+        regulator = row["Regulator_std"] if pd.notna(row["Regulator_std"]) else "—"
+        src_md = safe_linkify(row["Source_URL"])
+
+        header = f"{y_txt} — {title}"
+
+        with st.expander(header, expanded=False):
+            st.markdown(f"**Regulator:** {regulator}")
+            if src_md:
+                st.markdown(f"**Link:** {src_md}")
+
+            if detail_cols:
+                # Show remaining columns as a key-value table
+                details = (
+                    row[detail_cols]
+                    .dropna()
+                    .astype(str)
+                    .to_frame(name="Value")
+                )
+                details.index.name = "Field"
+                st.dataframe(details, use_container_width=True, hide_index=False)
+            else:
+                st.caption("No additional fields found for this row.")
+
 
     st.caption("Links shown as 'Source' are taken directly from the 'Official Source' column in CBregs.xlsx.")
 

@@ -176,7 +176,7 @@ def build_hover_list(df_country_latest: pd.DataFrame) -> str:
 df_all = load_cbregs(DATA_FILE)
 
 if df_all.empty:
-    st.error("CBregs.xlsx loaded but produced no rows.")
+    st.error("Data loaded but produced no rows.")
     st.stop()
 
 # =========================
@@ -256,13 +256,29 @@ with tab_map:
     )
 
     fig.update_geos(
-    scope="asia",
-    showcountries=True,
-    showcoastlines=True,
-    fitbounds="locations",
+        scope="asia",
+        fitbounds="locations",
+        projection_type="mercator",
+        showcountries=True,
+        countrycolor="rgba(255,255,255,0.85)",
+        showcoastlines=True,
+        coastlinecolor="rgba(255,255,255,0.35)",
+        showland=True,
+        landcolor="rgba(20, 30, 45, 1)",
+        showocean=True,
+        oceancolor="rgba(10, 16, 26, 1)",
+        showlakes=True,
+        lakecolor="rgba(10, 16, 26, 1)",
+        bgcolor="rgba(0,0,0,0)",
+    )
+    
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=0, r=0, t=0, b=0),
+        height=560,
     )
 
-    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=520)
     st.plotly_chart(fig, use_container_width=True)
 
     st.caption("Hover a country to preview its 10 most recent regulations (based on the current filters).")

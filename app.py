@@ -182,7 +182,7 @@ if df_all.empty:
 # =========================
 # Sidebar filters (ORDER: Category -> Year -> Country -> Regulator)
 # =========================
-st.sidebar.header("Filters")
+st.sidebar.header("Filters (test)")
 
 categories = ["All"] + sorted(df_all["Category"].dropna().unique().tolist())
 sel_category = st.sidebar.selectbox("Category (worksheet)", options=categories, index=0)

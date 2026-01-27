@@ -208,39 +208,44 @@ if sel_category != "All":
 
 countries = sorted(df_f["Country_std"].dropna().unique().tolist())
 
-# Initialise state
-if "country_select_all" not in st.session_state:
-    st.session_state.country_select_all = True
+# ---- init defaults (must happen BEFORE widgets with these keys are created)
+st.session_state.setdefault("country_select_all", True)
+st.session_state.setdefault("selected_countries", countries.copy())
 
-if "selected_countries" not in st.session_state:
-    st.session_state.selected_countries = countries.copy()
+# Keep selected list valid when category changes
+st.session_state["selected_countries"] = [
+    c for c in st.session_state["selected_countries"] if c in countries
+]
+if not st.session_state["selected_countries"]:
+    st.session_state["selected_countries"] = countries.copy()
 
-# Select-all toggle
+def _toggle_select_all():
+    if st.session_state["country_select_all"]:
+        st.session_state["selected_countries"] = countries.copy()
+
+def _countries_changed():
+    st.session_state["country_select_all"] = (
+        set(st.session_state["selected_countries"]) == set(countries)
+    )
+
+# ---- widgets
 st.sidebar.checkbox(
     "Select all countries",
     key="country_select_all",
+    on_change=_toggle_select_all,
 )
 
-# If user toggles Select-all → update the multiselect
-if st.session_state.country_select_all:
-    st.session_state.selected_countries = countries.copy()
-
-# Country multiselect
 st.sidebar.multiselect(
     "Country",
     options=countries,
     key="selected_countries",
+    on_change=_countries_changed,
 )
 
-# If user manually edits the multiselect, update Select-all flag
-if set(st.session_state.selected_countries) != set(countries):
-    st.session_state.country_select_all = False
-else:
-    st.session_state.country_select_all = True
+# ---- apply filter
+if st.session_state["selected_countries"]:
+    df_f = df_f[df_f["Country_std"].isin(st.session_state["selected_countries"])]
 
-# Apply filter
-if st.session_state.selected_countries:
-    df_f = df_f[df_f["Country_std"].isin(st.session_state.selected_countries)]
 
 
 # regulators = sorted(df_f["Regulator_std"].dropna().unique().tolist())

@@ -174,6 +174,10 @@ def build_hover_list(df_country_latest: pd.DataFrame) -> str:
 # Load data
 # =========================
 # df_all = load_cbregs(DATA_FILE)
+p = Path(DATA_FILE)
+if not p.exists():
+    p = Path(__file__).parent / DATA_FILE
+
 df_all = load_cbregs(DATA_FILE, p.stat().st_mtime)
 
 if df_all.empty:

@@ -94,7 +94,7 @@ def safe_linkify(url: str) -> str:
     return f"[Source]({url})"
 
 @st.cache_data
-def load_cbregs(file_path: str) -> pd.DataFrame:
+def load_cbregs(file_path: str, file_mtime: float) -> pd.DataFrame:
     p = Path(file_path)
     if not p.exists():
         # common Streamlit Cloud pattern: relative to app file
@@ -173,7 +173,8 @@ def build_hover_list(df_country_latest: pd.DataFrame) -> str:
 # =========================
 # Load data
 # =========================
-df_all = load_cbregs(DATA_FILE)
+# df_all = load_cbregs(DATA_FILE)
+df_all = load_cbregs(DATA_FILE, p.stat().st_mtime)
 
 if df_all.empty:
     st.error("Data loaded but produced no rows.")

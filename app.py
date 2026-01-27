@@ -275,7 +275,7 @@ tab_map, tab_table = st.tabs(["Map", "Table"])
 # MAP TAB
 # =========================
 with tab_map:
-    st.subheader("Map")
+    st.subheader("")
 
     # Country counts + hover preview
     by_country = (

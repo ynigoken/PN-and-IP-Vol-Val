@@ -10,7 +10,7 @@ import streamlit as st
 # App config
 # =========================
 st.set_page_config(page_title="ASEAN Regulatory Dashboard", layout="wide")
-st.title("ASEAN Regulatory Dashboard (test)")
+st.title("ASEAN Regulatory Dashboard (dev 2.0)")
 
 DATA_FILE = "CBregs.xlsx"  
 
@@ -182,7 +182,7 @@ if df_all.empty:
 # =========================
 # Sidebar filters (ORDER: Category -> Year -> Country -> Regulator)
 # =========================
-st.sidebar.header("Filters (test)")
+st.sidebar.header("Filters")
 
 categories = ["All"] + sorted(df_all["Category"].dropna().unique().tolist())
 sel_category = st.sidebar.selectbox("Category (worksheet)", options=categories, index=0)
@@ -191,31 +191,31 @@ df_f = df_all.copy()
 if sel_category != "All":
     df_f = df_f[df_f["Category"] == sel_category]
 
-# Year slider
-years = df_f["Year"].dropna().astype(int)
-if len(years) > 0:
-    y_min, y_max = int(years.min()), int(years.max())
-    sel_year = st.sidebar.slider("Year", min_value=y_min, max_value=y_max, value=(y_min, y_max))
-    df_f = df_f[df_f["Year"].notna()]
-    df_f = df_f[(df_f["Year"] >= sel_year[0]) & (df_f["Year"] <= sel_year[1])]
-else:
-    st.sidebar.caption("No parseable years found in the current category filter.")
+# # Year slider
+# years = df_f["Year"].dropna().astype(int)
+# if len(years) > 0:
+#     y_min, y_max = int(years.min()), int(years.max())
+#     sel_year = st.sidebar.slider("Year", min_value=y_min, max_value=y_max, value=(y_min, y_max))
+#     df_f = df_f[df_f["Year"].notna()]
+#     df_f = df_f[(df_f["Year"] >= sel_year[0]) & (df_f["Year"] <= sel_year[1])]
+# else:
+#     st.sidebar.caption("No parseable years found in the current category filter.")
 
 countries = sorted(df_f["Country_std"].dropna().unique().tolist())
 sel_countries = st.sidebar.multiselect("Country", options=countries, default=countries)
 if sel_countries:
     df_f = df_f[df_f["Country_std"].isin(sel_countries)]
 
-regulators = sorted(df_f["Regulator_std"].dropna().unique().tolist())
-sel_regulators = st.sidebar.multiselect("Regulator", options=regulators, default=regulators)
-if sel_regulators:
-    df_f = df_f[df_f["Regulator_std"].isin(sel_regulators)]
+# regulators = sorted(df_f["Regulator_std"].dropna().unique().tolist())
+# sel_regulators = st.sidebar.multiselect("Regulator", options=regulators, default=regulators)
+# if sel_regulators:
+#     df_f = df_f[df_f["Regulator_std"].isin(sel_regulators)]
 
-# Basic KPI
-k1, k2, k3 = st.columns(3)
-k1.metric("Regulations (rows)", f"{len(df_f):,}")
-k2.metric("Countries", f"{df_f['Country_std'].nunique():,}")
-k3.metric("Regulators", f"{df_f['Regulator_std'].nunique():,}")
+# # Basic KPI
+# k1, k2, k3 = st.columns(3)
+# k1.metric("Regulations (rows)", f"{len(df_f):,}")
+# k2.metric("Countries", f"{df_f['Country_std'].nunique():,}")
+# k3.metric("Regulators", f"{df_f['Regulator_std'].nunique():,}")
 
 st.divider()
 

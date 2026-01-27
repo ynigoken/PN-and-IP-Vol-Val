@@ -404,7 +404,7 @@ with tab_table:
             t[s] = False
 
     t.insert(0, "Flag", t["Country"].map(lambda x: ASEAN_FLAG.get(str(x), "🏳️")))
-    t = t[["Flag", "Country", "Regulator + all_sheet_names].sort_values("Country")
+    t = t[["Flag", "Country", "Regulator" + all_sheet_names].sort_values("Country")
 
     # Use dataframe selection; show preview + open modal
     st.caption("Select a row to preview and open a country popup.")

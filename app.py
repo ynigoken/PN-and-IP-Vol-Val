@@ -325,11 +325,10 @@ with tab_map:
     fig.update_traces(
     hovertemplate="%{location}<br>%{customdata[0]}<extra></extra>"
     )
-
-    
     
     # Remove legend/colorbar entirely |dispable box/lasso zoom
     fig.update_layout(
+        hoverlabel=dict(align="left"),
         dragmode=False,
         hovermode='closest',
         coloraxis_showscale=False)

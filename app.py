@@ -480,7 +480,7 @@ def country_dialog(country: str):
     # Quick header info
     regs = sorted(set([x for x in d["Regulator_std"].dropna().tolist()]))
     st.markdown("**Regulator:** " + (", ".join(regs) if regs else "—"))
-    st.markdown(f"**Total regulations (rows):** {len(d):,}")
+    # st.markdown(f"**Total regulations (rows):** {len(d):,}")
 
     # Show grouped by category
     for cat in sorted(d["Category"].dropna().unique().tolist()):

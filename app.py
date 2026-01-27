@@ -309,12 +309,14 @@ with tab_map:
         hover_data={"Latest_10": True, "Country": False},  # remove Regulation_Count from hover too
     )
     
-    # Remove legend/colorbar entirely
-    fig.update_layout(coloraxis_showscale=False)
-
-
-
-
+    # Remove legend/colorbar entirely |dispable box/lasso zoom
+    fig.update_layout(
+        dragmode=False,
+        hovermode='closest',
+        coloraxis_showscale=False)
+    
+    fig.update_xaxes(fixedrange=True)
+    fig.update_yaxes(fixedrange=True)
     
     fig.update_geos(
         scope="asia",

@@ -667,7 +667,7 @@ def country_dialog(country: str):
         # Columns we don't want to show as "extra details"
         internal_cols = {
             "Category", "Country_std", "Regulator_std", "Year_raw", "Year", "Year_sort",
-            "Regulation_Title", "Source_URL", 'ID', 'country', 'regulator', 'year', 'source'
+            "Regulation_Title", "Source_URL", 'ID', 'country', 'regulator', 'year', 'source', 'title'
         }
     
         # Everything else from the sheet row will be shown as details

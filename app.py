@@ -377,7 +377,16 @@ with tab_map:
     )
 
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        config={
+            "displayModeBar": False,      # removes zoom / pan / lasso / camera icons
+            "scrollZoom": False,         # disables scroll wheel zoom
+            "doubleClick": False,        # disables double-click zoom reset
+        }
+    )
+
 
     st.caption("Hover a country to preview its 10 most recent regulations (based on the current filters).")
 

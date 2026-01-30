@@ -570,12 +570,12 @@ with tab_table:
         )
 
         t = regs_by_country.merge(provs, on="Country", how="outer").fillna({"Regulator": ""})
-        for s in all_sheet_names:
-            if s not in t.columns:
-                t[s] = False
+        # for s in all_sheet_names:
+        #     if s not in t.columns:
+        #         t[s] = False
 
         t.insert(0, "Flag", t["Country"].map(lambda x: ASEAN_FLAG.get(str(x), "🏳️")))
-        t = t[["Flag", "Country", "Regulator"] + all_sheet_names].sort_values("Country")
+        t = t[["Flag", "Country", "Regulator"] + cols_to_concat].sort_values("Country").dropna(axis=1, how="all")
 
         CHECK, BLANK = "✓", ""
         for s in all_sheet_names:

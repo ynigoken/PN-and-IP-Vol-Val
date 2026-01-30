@@ -332,7 +332,9 @@ with tab_map:
         hoverlabel=dict(align="left"),
         dragmode=False,
         hovermode='closest',
-        coloraxis_showscale=False)
+        coloraxis_showscale=False
+        xaxis=dict(fixedrange=True),
+        yaxis=dict(fixedrange=True))
     
     fig.update_xaxes(fixedrange=True)
     fig.update_yaxes(fixedrange=True)
@@ -341,12 +343,18 @@ with tab_map:
 
     fig.update_geos(
         scope="asia",
-        fitbounds="locations",
         projection_type="mercator",
-        showcountries=True,
-        countrycolor="rgba(255,255,255,0.85)",
+    
+        # --- LOCK ASEAN VIEWPORT ---
+        lonaxis=dict(range=[92, 141]),
+        lataxis=dict(range=[-11, 24]),
+    
+        # --- Disable interactions ---
+        visible=True,
         showcoastlines=True,
         coastlinecolor="rgba(255,255,255,0.35)",
+        showcountries=True,
+        countrycolor="rgba(255,255,255,0.85)",
         showland=True,
         landcolor="rgba(20, 30, 45, 1)",
         showocean=True,
@@ -355,6 +363,7 @@ with tab_map:
         lakecolor="rgba(10, 16, 26, 1)",
         bgcolor="rgba(0,0,0,0)",
     )
+
 
 
 

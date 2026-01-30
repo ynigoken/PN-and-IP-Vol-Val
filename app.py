@@ -575,7 +575,7 @@ with tab_table:
         #         t[s] = False
 
         t.insert(0, "Flag", t["Country"].map(lambda x: ASEAN_FLAG.get(str(x), "🏳️")))
-        t = t[["Flag", "Country", "Regulator"] + cols_to_concat].sort_values("Country").dropna(axis=1, how="all")
+        t = t[["Flag", "Country", "Regulator"] + [col for col in t.columns if col not in ["Flag", "Country", "Regulator"]]].sort_values("Country").dropna(axis=1, how="all")
 
         CHECK, BLANK = "✓", ""
         for s in all_sheet_names:

@@ -572,7 +572,7 @@ with tab_table:
 
         cols_to_concat = d.drop(columns=['ID', 'title', 'year', 'Year', 'Year_raw', 'source', 
                                          'country', 'regulator','Category','Country_std', 'Regulator_std', 
-                                         'Source_URL']).columns
+                                         'Source_URL','Category']).columns
         provs = (
             d
             .drop(columns=['ID', 'title', 'year', 'source'])

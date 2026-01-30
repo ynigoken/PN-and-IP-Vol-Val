@@ -572,7 +572,7 @@ with tab_table:
 
         cols_to_concat = d.drop(columns=['ID', 'title', 'year', 'Year', 'Year_raw', 'source', 
                                          'country', 'regulator','Category','Country_std', 'Regulator_std', 
-                                         'Source_URL','Category']).columns
+                                         'Source_URL']).columns
         provs = (
             d
             .drop(columns=['ID', 'title', 'year', 'source'])
@@ -594,7 +594,7 @@ with tab_table:
         #         t[s] = False
 
         t.insert(0, "Flag", t["Country"].map(lambda x: ASEAN_FLAG.get(str(x), "🏳️")))
-        t = t[["Flag", "Country", "Regulator"] + [col for col in t.columns if col not in ["Flag", "Country", "Regulator"]]].sort_values("Country").dropna(axis=1, how="all")
+        t = t[["Flag", "Country", "Regulator"] + [col for col in t.columns if col not in ["Flag", "Country", "Regulator", "Category"]]].sort_values("Country").dropna(axis=1, how="all")
 
         # CHECK, BLANK = "✓", ""
         # for s in [col for col in t.columns if col not in ["Flag", "Country", "Regulator"]]:

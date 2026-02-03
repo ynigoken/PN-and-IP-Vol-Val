@@ -2,10 +2,10 @@
 # PESONet & InstaPay Dashboard
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
-# - Humanized units: M, B, T (uppercase T for trillion) with ₱ for Value
+# - Humanized units: M, B, T (uppercase T) with ₱ for Value
 # - PESONet: Volume (green BAR, RIGHT axis 0→10M, ticks 2M); Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
 # - InstaPay: Volume (red BAR, RIGHT axis 0→800M, ticks 200M);  Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
-# - LINE is rendered ON TOP of bars (add bar first; set bar opacity; thicker line & bigger markers)
+# - LINE rendered ON TOP of bars (add bar first, then line). Bars are solid (no opacity).
 # - Tables: Volume as comma-int; Value as ₱ comma + 1 decimal; Period as Jan-YYYY
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.5.3 • line on top • 'T' for trillion • PESONet 0–10M @ 2M")
+st.caption("v1.5.4 • solid colors restored • line on top • PESONet 0–10M @ 2M • 'T' for trillion")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -199,7 +199,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     InstaPay: Volume ticks 0..800M step 200M.
     Value (all): 0..1.4T step 200B (labels 200B, 400B, ...).
     Colors: PESONet -> bar green, InstaPay -> bar red; line dark blue for both.
-    NOTE: Add BAR first (behind), then LINE (on top). Use bar opacity & stronger line.
+    NOTE: Add BAR first (behind), then LINE (on top). Bars are solid (no opacity).
     """
     # Colors
     dark_blue = "#003366"
@@ -228,7 +228,8 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
             y=df["Volume"],
             name="Volume",
             marker_color=bar_color,
-            opacity=0.45,  # ensure line stays visible
+            marker_line_color=bar_color,  # solid color
+            marker_line_width=0.0,
             hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
         ),
         secondary_y=True,
@@ -242,7 +243,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
             mode="lines+markers",
             name="Value (₱)",
             line=dict(color=line_color, width=3),
-            marker=dict(size=5),
+            marker=dict(size=5, color=line_color),
             hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
             cliponaxis=False,
         ),
@@ -389,7 +390,7 @@ if not a_agg.empty:
     else:
         a_vol_yoy = a_val_yoy = None
 else:
-    a_vol = a_val = a_vol_yoy = a_val_yoy = None
+    a_vol = a_val = a_val_yoy = a_val_yoy = None
 
 k1, k2, k3, k4 = st.columns(4)
 k1.metric(f"YTM {latest_period.strftime('%Y-%m')} Volume", _humanize(ytm_vol),
@@ -519,5 +520,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Line is now on top of bars (opacity 0.45 on bars, thicker line). 'T' used for trillions. PESONet volume ticks: 0–10M @ 2M; InstaPay: 0–800M @ 200M. Value ticks: 0–1.4T @ 200B.")
-
+st.caption("Bars are solid again (original colors), with the line drawn on top. PESONet: 0–10M @ 2M (right). InstaPay: 0–800M @ 200M (right). Value: 0–1.4T @ 200B (left). KPIs use M/B/T.")

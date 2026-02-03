@@ -221,7 +221,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     b_vals, b_text = _ticks_value_default()
     b_range = [0, 1.4e12]
 
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig = make_subplots() #specs=[[{"secondary_y": True}]]
 
     
 
@@ -272,7 +272,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     fig.update_layout(
         title=title,
         hovermode="x unified",
-        #barmode="overlay",
+        barmode="overlay",
         margin=dict(l=10, r=10, t=50, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )

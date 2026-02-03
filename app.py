@@ -23,7 +23,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.4 • bar+line chart • comma-formatted tables • month/year pickers")
+st.caption("v1.4.1 • bar+line chart • comma-formatted tables • month/year pickers")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -242,7 +242,7 @@ def _bar_line_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
             y=df["Volume"],
             name="Volume",
             marker_color="#1f77b4",
-            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",  # comma, no decimals
+            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
         ),
         secondary_y=False,
     )
@@ -255,7 +255,7 @@ def _bar_line_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
             mode="lines+markers",
             name="Value (₱)",
             line=dict(color="#ff7f0e", width=2),
-            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",  # one decimal with commas
+            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
         ),
         secondary_y=True,
     )
@@ -267,8 +267,9 @@ def _bar_line_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
         margin=dict(l=10, r=10, t=50, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig.update_yaxes(title_text="Volume (count)", secondary_y=False, rangemode="tozero")
-    fig.update_yaxes(title_text="Value (₱)", secondary_y=True, rangemode="tozero")
+    # Axis tick formats: integers for Volume, 1-decimal for Value
+    fig.update_yaxes(title_text="Volume (count)", secondary_y=False, rangemode="tozero", tickformat=",.0f")
+    fig.update_yaxes(title_text="Value (₱)", secondary_y=True, rangemode="tozero", tickformat=",.1f")
     return fig
 
 
@@ -500,5 +501,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Tip: Use **Range** or **Pick months & years** to filter exactly the months you want. Tables show Volume as 4,278,923 (no decimals) and Value as ₱1,234,567.8.")
-``
+st.caption("Tip: Use **Range** or **Pick months & years** to filter exactly the months you want. Tables show Volume as 4,278,923 (no decimals) and Value as ₱1,234,567.8 (one decimal).")

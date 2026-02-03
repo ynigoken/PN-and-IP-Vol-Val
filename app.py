@@ -3,11 +3,11 @@
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
 # - Title: "PESONet and InstaPay Volume and Value"
-# - Subheading: "PESONet Source: Philippine Clearing House Corporation · InstaPay Source: BancNet"
+# - Gray caption: "PESONet Source: Philippine Clearing House Corporation · InstaPay Source: BancNet"
 # - Humanized units: M, B, T (uppercase T) with ₱ for Value
 # - PESONet: Volume (green BAR, RIGHT axis 0→10M, ticks 2M); Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
 # - InstaPay: Volume (red BAR, RIGHT axis 0→800M, ticks 200M);  Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
-# - LINE rendered ON TOP of bars (add order + explicit trace reordering). Bars are solid (no opacity).
+# - Line is guaranteed ON TOP of bars (add order + explicit trace reordering). Bars are solid (no opacity).
 # - Tables: Volume as comma-int; Value as ₱ comma + 1 decimal; Period as Jan-YYYY
 
 from __future__ import annotations
@@ -27,11 +27,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet and InstaPay Volume and Value", layout="wide")
 st.title("PESONet and InstaPay Volume and Value")
-st.markdown(
-    "#### PESONet Source: **Philippine Clearing House Corporation** · "
-    "InstaPay Source: **BancNet**"
-)
-st.caption("v1.5.5 • solid colors • line on top • PESONet 0–10M @ 2M • 'T' for trillion")
+st.caption("PESONet Source: Philippine Clearing House Corporation · InstaPay Source: BancNet")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -205,7 +201,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     InstaPay: Volume ticks 0..800M step 200M.
     Value (all): 0..1.4T step 200B (labels 200B, 400B, ...).
     Colors: PESONet -> bar green, InstaPay -> bar red; line dark blue for both.
-    NOTE: Add BAR first (behind), then LINE (on top). Then explicitly reorder traces to keep line on top.
+    NOTE: Add BAR first (behind), then LINE (on top), then explicitly re-order traces to ensure the line sits on top.
     """
     # Colors
     dark_blue = "#003366"
@@ -253,7 +249,6 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     fig.add_trace(line_trace, secondary_y=False)
 
     # --- Hard guarantee the line is on top: move all scatter traces to the end of the trace list
-    # (Plotly renders traces in list order; last = top)
     if any(t.type == "scatter" for t in fig.data):
         bars = [t for t in fig.data if t.type != "scatter"]
         lines = [t for t in fig.data if t.type == "scatter"]
@@ -528,5 +523,3 @@ with tab_ytm_ytd:
         hide_index=True,
         height=320,
     )
-
-st.caption("Bars are solid (original colors), line is explicitly moved to the top of the trace stack. PESONet: 0–10M @ 2M (right). InstaPay: 0–800M @ 200M (right). Value: 0–1.4T @ 200B (left). KPIs use M/B/T.")

@@ -234,7 +234,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         marker_line_width=0.0,
         hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
     )
-    fig.add_trace(bar_trace) #secondary_y=True
+    fig.add_trace(bar_trace,secondary_y=True) #secondary_y=True
 
      # 2) VALUE (LINE) on LEFT   --- add SECOND (on top)
     line_trace = go.Scatter(
@@ -247,7 +247,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
         cliponaxis=False,
     )
-    fig.add_trace(line_trace,secondary_y=True) #secondary_y=False
+    fig.add_trace(line_trace) #secondary_y=False
 
     # --- Hard guarantee the line is on top: move all scatter traces to the end of the trace list
     if any(t.type == "scatter" for t in fig.data):

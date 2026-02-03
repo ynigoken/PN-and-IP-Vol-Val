@@ -333,3 +333,158 @@ if not q_agg.empty:
         prev_q = q_agg.iloc[-2]
         q_vol_qoq = _safe_pct(q_vol, prev_q["Volume"])
         q_val_qoq = _safe_pct(q_val, prev_q["Value"])
+    else:
+        q_vol_qoq = q_val_qoq = None
+else:
+    q_vol = q_val = q_vol_qoq = q_val_qoq = None
+
+if not a_agg.empty:
+    last_a = a_agg.iloc[-1]
+    a_vol, a_val = last_a["Volume"], last_a["Value"]
+    if len(a_agg) >= 2:
+        prev_a = a_agg.iloc[-2]
+        a_vol_yoy = _safe_pct(a_vol, prev_a["Volume"])
+        a_val_yoy = _safe_pct(a_val, prev_a["Value"])
+    else:
+        a_vol_yoy = a_val_yoy = None
+else:
+    a_vol = a_val = a_vol_yoy = a_val_yoy = None
+
+k1, k2, k3, k4 = st.columns(4)
+k1.metric(f"YTM {latest_period.strftime('%Y-%m')} Volume", _humanize(ytm_vol),
+          f"{'' if ytm_vol_yoy is None else f'{ytm_vol_yoy*100:,.1f}% YoY'}",
+          help="Jan..selected month of current year vs same months last year.")
+k2.metric(f"YTM {latest_period.strftime('%Y-%m')} Value", _humanize(ytm_val, is_money=True),
+          f"{'' if ytm_val_yoy is None else f'{ytm_val_yoy*100:,.1f}% YoY'}")
+k3.metric("Latest Quarter Volume", _humanize(q_vol), f"{'' if q_vol_qoq is None else f'{q_vol_qoq*100:,.1f}% QoQ'}")
+k4.metric("Latest Quarter Value", _humanize(q_val, is_money=True), f"{'' if q_val_qoq is None else f'{q_val_qoq*100:,.1f}% QoQ'}")
+
+k5, k6 = st.columns(2)
+k5.metric("Latest Year Volume", _humanize(a_vol), f"{'' if a_vol_yoy is None else f'{a_vol_yoy*100:,.1f}% YoY'}")
+k6.metric("Latest Year Value", _humanize(a_val, is_money=True), f"{'' if a_val_yoy is None else f'{a_val_yoy*100:,.1f}% YoY'}")
+
+with st.expander("Definitions"):
+    st.markdown(
+        """
+- **Selected Filter totals (top)**: Sum of the exact months & years you picked  
+- **Quarterly**: Sum per calendar quarter  
+- **Annual**: Sum per calendar year  
+- **YTM (Year-to-Month)**: January to the selected month of the current year; YoY vs the same Jan–month range last year  
+- **YTD (Year-to-Date)**: Same span as YTM at monthly granularity
+        """
+    )
+
+st.divider()
+
+
+# =========================
+# Chart
+# =========================
+st.subheader(f"Monthly Trend — {series}")
+fig = _dual_axis_chart(df, title=f"{series} Volume & Value")
+st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+
+# =========================
+# Aggregations (Tables)
+# =========================
+tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(
+    ["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"]
+)
+
+# ---- Monthly (filtered)
+with tab_monthly:
+    show_cols = ["Period", "Volume", "Value"]
+    t = df[show_cols].copy()
+
+    # Period as 'Jan-2023'
+    t["Period"] = t["Period"].dt.strftime("%b-%Y")
+
+    # Display with comma separators and one decimal place
+    st.dataframe(
+        t,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
+        },
+        height=420,
+    )
+
+    # CSV export (Period also formatted)
+    t_csv = df[show_cols].copy()
+    t_csv["Period"] = t_csv["Period"].dt.strftime("%b-%Y")
+    csv = t_csv.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download monthly (CSV)",
+        data=csv,
+        file_name=f"{series}_monthly_filtered.csv",
+        mime="text/csv"
+    )
+
+# ---- Quarterly (full series context; with comma separators)
+with tab_quarterly:
+    tq = _agg_quarterly(df0)
+    tq_disp = tq[["YearQ", "Volume", "Value"]].rename(columns={"YearQ": "Quarter"})
+    st.dataframe(
+        tq_disp,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
+        },
+        height=420,
+    )
+    csv = tq_disp.to_csv(index=False).encode("utf-8")
+    st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
+
+# ---- Annual (full series context; with comma separators)
+with tab_annual:
+    ta = _agg_annual(df0)
+    st.dataframe(
+        ta,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
+        },
+        height=420,
+    )
+    csv = ta.to_csv(index=False).encode("utf-8")
+    st.download_button("Download annual (CSV)", data=csv, file_name=f"{series}_annual.csv", mime="text/csv")
+
+# ---- YTM & YTD summary table (kept humanized for readability)
+with tab_ytm_ytd:
+    ytm_table = pd.DataFrame(
+        {
+            "Metric": ["YTM Volume", "YTM Value", "YTM YoY", "YTD Volume", "YTD Value"],
+            "Current": [ytm_vol, ytm_val, None if ytm_vol_yoy is None else ytm_vol_yoy, ytd_vol, ytd_val],
+            "Previous (YoY base)": [ytm_prev_vol, ytm_prev_val, None, ytm_prev_vol, ytm_prev_val],
+        }
+    )
+    # Humanized display columns
+    ytm_table["Current (fmt)"] = [
+        _humanize(ytm_vol),
+        _humanize(ytm_val, is_money=True),
+        "—" if ytm_vol_yoy is None else f"{ytm_vol_yoy*100:,.1f}%",
+        _humanize(ytd_vol),
+        _humanize(ytd_val, is_money=True),
+    ]
+    ytm_table["Previous (fmt)"] = [
+        _humanize(ytm_prev_vol),
+        _humanize(ytm_prev_val, is_money=True),
+        "—",
+        _humanize(ytm_prev_vol),
+        _humanize(ytm_prev_val, is_money=True),
+    ]
+    st.dataframe(
+        ytm_table[["Metric", "Current (fmt)", "Previous (fmt)"]],
+        use_container_width=True,
+        hide_index=True,
+        height=320,
+    )
+
+st.caption("Tip: Choose **Range** or **Pick months & years** to filter exactly the months you want. Tables use comma separators and show Period as **Jan-YYYY**.")

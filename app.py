@@ -2,9 +2,10 @@
 # PESONet & InstaPay Dashboard
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
-# - Humanized units: M, B, t (with ₱ for Value)
-# - PESONet: Volume (green bar, RIGHT axis 0→10M, ticks 2M); Value (dark blue line, LEFT axis 0→1.4t, ticks 200B)
-# - InstaPay: Volume (red bar, RIGHT axis 0→800M, ticks 200M);  Value (dark blue line, LEFT axis 0→1.4t, ticks 200B)
+# - Humanized units: M, B, T (uppercase T for trillion) with ₱ for Value
+# - PESONet: Volume (green BAR, RIGHT axis 0→10M, ticks 2M); Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
+# - InstaPay: Volume (red BAR, RIGHT axis 0→800M, ticks 200M);  Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
+# - Line trace rendered ON TOP of bars for better visibility
 # - Tables: Volume as comma-int; Value as ₱ comma + 1 decimal; Period as Jan-YYYY
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.5.1 • PESONet 0–10M @ 2M ticks • colored bar+line • formatted tables")
+st.caption("v1.5.2 • line on top • 'T' for trillion • PESONet 0–10M @ 2M")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -92,7 +93,7 @@ def _humanize(x: float | int, is_money: bool = False) -> str:
       - < 1,000,000: 12,345.7
       - >= 1M: 1.1M
       - >= 1B: 1.1B
-      - >= 1t: 1.1t (trillion; lowercase t as requested)
+      - >= 1T: 1.1T (uppercase T for trillion)
     Always keeps '₱' for money.
     """
     if x is None or pd.isna(x):
@@ -106,7 +107,7 @@ def _humanize(x: float | int, is_money: bool = False) -> str:
 
     if absx >= trillion:
         num = absx / trillion
-        text = f"{sign}{num:,.1f}t"
+        text = f"{sign}{num:,.1f}T"
     elif absx >= billion:
         num = absx / billion
         text = f"{sign}{num:,.1f}B"
@@ -164,7 +165,7 @@ def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame
     return t[cols]
 
 
-# === Axis helpers (updated) ===
+# === Axis helpers ===
 def _ticks_custom(start: float, stop: float, step: float, unit_label: str) -> tuple[list[float], list[str]]:
     """
     Generic helper to produce tick values and 'pretty' labels.
@@ -187,7 +188,7 @@ def _ticks_volume_default() -> tuple[list[float], list[str]]:
     return _ticks_custom(0, 800e6, 200e6, "M")
 
 def _ticks_value_default() -> tuple[list[float], list[str]]:
-    # Value for all: 0..1.4t, step 200B (labels in B)
+    # Value for all: 0..1.4T, step 200B (labels in B)
     return _ticks_custom(0, 1.4e12, 200e9, "B")
 
 
@@ -196,8 +197,9 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     Volume = BAR on RIGHT axis; Value = LINE on LEFT axis.
     PESONet: Volume ticks 0..10M step 2M (labels 2M, 4M, ...).
     InstaPay: Volume ticks 0..800M step 200M.
-    Value (all): 0..1.4t step 200B (labels 200B, 400B, ...).
+    Value (all): 0..1.4T step 200B (labels 200B, 400B, ...).
     Colors: PESONet -> bar green, InstaPay -> bar red; line dark blue for both.
+    NOTE: Add BAR first, then LINE so the LINE is rendered on top.
     """
     # Colors
     dark_blue = "#003366"
@@ -219,7 +221,19 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # Value (LINE) on LEFT
+    # 1) VOLUME (BAR) on RIGHT  --- add FIRST (behind)
+    fig.add_trace(
+        go.Bar(
+            x=df["Period"],
+            y=df["Volume"],
+            name="Volume",
+            marker_color=bar_color,
+            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+
+    # 2) VALUE (LINE) on LEFT   --- add SECOND (on top)
     fig.add_trace(
         go.Scatter(
             x=df["Period"],
@@ -230,18 +244,6 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
             hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
         ),
         secondary_y=False,
-    )
-
-    # Volume (BAR) on RIGHT
-    fig.add_trace(
-        go.Bar(
-            x=df["Period"],
-            y=df["Volume"],
-            name="Volume",
-            marker_color=bar_color,
-            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
-        ),
-        secondary_y=True,
     )
 
     # Left (Value) axis
@@ -414,10 +416,10 @@ st.divider()
 
 
 # =========================
-# Chart (series-colored; Volume = BAR on right, Value = LINE on left)
+# Chart (series-colored; Volume BAR RIGHT, Value LINE LEFT; line on top)
 # =========================
 st.subheader(f"Monthly Trend — {series}")
-fig = _bar_line_chart(df, series, title=f"{series} • Volume (bar, right) & Value (line, left)")
+fig = _bar_line_chart(df, series, title=f"{series} • Value (line, left) over Volume (bar, right)")
 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
@@ -514,4 +516,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("PESONet Volume ticks: 0–10M every 2M (right). InstaPay Volume ticks: 0–800M every 200M (right). Value ticks: 0–1.4t every 200B (left).")
+st.caption("PESONet: line now rendered on top of bars; 'T' used for trillions in KPIs. Volume ticks (right): PESONet 0–10M @ 2M | InstaPay 0–800M @ 200M. Value ticks (left): 0–1.4T @ 200B.")

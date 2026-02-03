@@ -1,14 +1,7 @@
 # app.py
-# PESONet & InstaPay Dashboard
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
 # - Title: "PESONet and InstaPay Volume and Value"
-# - Gray caption: "PESONet Source: Philippine Clearing House Corporation · InstaPay Source: BancNet"
-# - Humanized units: M, B, T (uppercase T) with ₱ for Value
-# - PESONet: Volume (green BAR, RIGHT axis 0→10M, ticks 2M); Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
-# - InstaPay: Volume (red BAR, RIGHT axis 0→800M, ticks 200M);  Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
-# - Line is guaranteed ON TOP of bars (add order + explicit trace reordering). Bars are solid (no opacity).
-# - Tables: Volume as comma-int; Value as ₱ comma + 1 decimal; Period as Jan-YYYY
 
 from __future__ import annotations
 

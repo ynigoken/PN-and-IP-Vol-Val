@@ -2,10 +2,12 @@
 # PESONet & InstaPay Dashboard
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
+# - Title: "PESONet and InstaPay Volume and Value"
+# - Subheading: "PESONet Source: Philippine Clearing House Corporation · InstaPay Source: BancNet"
 # - Humanized units: M, B, T (uppercase T) with ₱ for Value
 # - PESONet: Volume (green BAR, RIGHT axis 0→10M, ticks 2M); Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
 # - InstaPay: Volume (red BAR, RIGHT axis 0→800M, ticks 200M);  Value (dark blue LINE, LEFT axis 0→1.4T, ticks 200B)
-# - LINE rendered ON TOP of bars (add bar first, then line). Bars are solid (no opacity).
+# - LINE rendered ON TOP of bars (add order + explicit trace reordering). Bars are solid (no opacity).
 # - Tables: Volume as comma-int; Value as ₱ comma + 1 decimal; Period as Jan-YYYY
 
 from __future__ import annotations
@@ -23,9 +25,13 @@ import streamlit as st
 # =========================
 # App config
 # =========================
-st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
-st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.5.4 • solid colors restored • line on top • PESONet 0–10M @ 2M • 'T' for trillion")
+st.set_page_config(page_title="PESONet and InstaPay Volume and Value", layout="wide")
+st.title("PESONet and InstaPay Volume and Value")
+st.markdown(
+    "#### PESONet Source: **Philippine Clearing House Corporation** · "
+    "InstaPay Source: **BancNet**"
+)
+st.caption("v1.5.5 • solid colors • line on top • PESONet 0–10M @ 2M • 'T' for trillion")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -199,7 +205,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     InstaPay: Volume ticks 0..800M step 200M.
     Value (all): 0..1.4T step 200B (labels 200B, 400B, ...).
     Colors: PESONet -> bar green, InstaPay -> bar red; line dark blue for both.
-    NOTE: Add BAR first (behind), then LINE (on top). Bars are solid (no opacity).
+    NOTE: Add BAR first (behind), then LINE (on top). Then explicitly reorder traces to keep line on top.
     """
     # Colors
     dark_blue = "#003366"
@@ -222,33 +228,36 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     # 1) VOLUME (BAR) on RIGHT  --- add FIRST (behind)
-    fig.add_trace(
-        go.Bar(
-            x=df["Period"],
-            y=df["Volume"],
-            name="Volume",
-            marker_color=bar_color,
-            marker_line_color=bar_color,  # solid color
-            marker_line_width=0.0,
-            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
-        ),
-        secondary_y=True,
+    bar_trace = go.Bar(
+        x=df["Period"],
+        y=df["Volume"],
+        name="Volume",
+        marker_color=bar_color,
+        marker_line_color=bar_color,  # solid color
+        marker_line_width=0.0,
+        hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
     )
+    fig.add_trace(bar_trace, secondary_y=True)
 
     # 2) VALUE (LINE) on LEFT   --- add SECOND (on top)
-    fig.add_trace(
-        go.Scatter(
-            x=df["Period"],
-            y=df["Value"],
-            mode="lines+markers",
-            name="Value (₱)",
-            line=dict(color=line_color, width=3),
-            marker=dict(size=5, color=line_color),
-            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
-            cliponaxis=False,
-        ),
-        secondary_y=False,
+    line_trace = go.Scatter(
+        x=df["Period"],
+        y=df["Value"],
+        mode="lines+markers",
+        name="Value (₱)",
+        line=dict(color=line_color, width=3),
+        marker=dict(size=5, color=line_color),
+        hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
+        cliponaxis=False,
     )
+    fig.add_trace(line_trace, secondary_y=False)
+
+    # --- Hard guarantee the line is on top: move all scatter traces to the end of the trace list
+    # (Plotly renders traces in list order; last = top)
+    if any(t.type == "scatter" for t in fig.data):
+        bars = [t for t in fig.data if t.type != "scatter"]
+        lines = [t for t in fig.data if t.type == "scatter"]
+        fig.data = tuple(bars + lines)
 
     # Left (Value) axis
     fig.update_yaxes(
@@ -520,4 +529,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Bars are solid again (original colors), with the line drawn on top. PESONet: 0–10M @ 2M (right). InstaPay: 0–800M @ 200M (right). Value: 0–1.4T @ 200B (left). KPIs use M/B/T.")
+st.caption("Bars are solid (original colors), line is explicitly moved to the top of the trace stack. PESONet: 0–10M @ 2M (right). InstaPay: 0–800M @ 200M (right). Value: 0–1.4T @ 200B (left). KPIs use M/B/T.")

@@ -3,7 +3,7 @@
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # with: (a) month/year pickers, (b) selected-filter totals first,
 # (c) humanized KPIs (Million/Billion/Trillion, ₱ retained),
-# (d) tables with comma formats (Volume int, Value one-decimal),
+# (d) tables with string-formatted display (Volume int commas; Value ₱ + commas + 1 decimal),
 # (e) chart: Volume as BAR, Value as LINE.
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.4.1 • bar+line chart • comma-formatted tables • month/year pickers")
+st.caption("v1.4.2 • table format fix • bar+line chart • month/year pickers")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -404,30 +404,43 @@ tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(
     ["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"]
 )
 
+def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame:
+    """Return a copy with formatted display columns for Period, Volume, Value."""
+    t = df_in.copy()
+    if period_fmt:
+        t["Period"] = t["Period"].dt.strftime("%b-%Y")
+    # Create display strings
+    t["Volume_display"] = t["Volume"].map(lambda x: "—" if pd.isna(x) else f"{x:,.0f}")
+    t["Value_display"]  = t["Value"].map(lambda x: "—" if pd.isna(x) else f"₱{x:,.1f}")
+    # Reorder for display
+    cols = []
+    if "Period" in t.columns:
+        cols.append("Period")
+    if "Quarter" in t.columns:
+        cols.append("Quarter")
+    cols += ["Volume_display", "Value_display"]
+    return t[cols]
+
 # ---- Monthly (filtered)
 with tab_monthly:
     show_cols = ["Period", "Volume", "Value"]
-    t = df[show_cols].copy()
+    t_raw = df[show_cols].copy()             # raw for CSV
+    t_disp = _format_table(df[show_cols], period_fmt=True)
 
-    # Period as 'Jan-2023'
-    t["Period"] = t["Period"].dt.strftime("%b-%Y")
-
-    # Display with comma separators:
-    #   Volume -> commas, no decimals (e.g., 4,278,923)
-    #   Value  -> ₱, commas, one decimal (e.g., ₱1,234,567.8)
     st.dataframe(
-        t,
+        t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,.0f"),
-            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
+            "Period": st.column_config.TextColumn(),
+            "Volume": st.column_config.TextColumn(help="Integers with comma separators"),
+            "Value": st.column_config.TextColumn(help="₱, commas, one decimal"),
         },
         height=420,
     )
 
-    # CSV export (Period also formatted)
-    t_csv = df[show_cols].copy()
+    # CSV export (Period formatted, numbers raw for analysis)
+    t_csv = t_raw.copy()
     t_csv["Period"] = t_csv["Period"].dt.strftime("%b-%Y")
     csv = t_csv.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -437,33 +450,36 @@ with tab_monthly:
         mime="text/csv"
     )
 
-# ---- Quarterly (full series context; with comma formats)
+# ---- Quarterly (full series context)
 with tab_quarterly:
     tq = _agg_quarterly(df0)
     tq_disp = tq[["YearQ", "Volume", "Value"]].rename(columns={"YearQ": "Quarter"})
+    t_disp = _format_table(tq_disp, period_fmt=False)
     st.dataframe(
-        tq_disp,
+        t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,.0f"),
-            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
+            "Quarter": st.column_config.TextColumn(),
+            "Volume": st.column_config.TextColumn(help="Integers with comma separators"),
+            "Value": st.column_config.TextColumn(help="₱, commas, one decimal"),
         },
         height=420,
     )
     csv = tq_disp.to_csv(index=False).encode("utf-8")
     st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
 
-# ---- Annual (full series context; with comma formats)
+# ---- Annual (full series context)
 with tab_annual:
     ta = _agg_annual(df0)
+    t_disp = _format_table(ta, period_fmt=False)
     st.dataframe(
-        ta,
+        t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,.0f"),
-            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
+            "Volume": st.column_config.TextColumn(help="Integers with comma separators"),
+            "Value": st.column_config.TextColumn(help="₱, commas, one decimal"),
         },
         height=420,
     )
@@ -501,4 +517,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Tip: Use **Range** or **Pick months & years** to filter exactly the months you want. Tables show Volume as 4,278,923 (no decimals) and Value as ₱1,234,567.8 (one decimal).")
+st.caption("Tip: Tables now render numbers as strings (Volume = 4,278,923; Value = ₱1,234,567.8) to avoid NumberColumn formatting issues. CSVs keep raw numbers for analysis.")

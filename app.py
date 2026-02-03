@@ -1,723 +1,410 @@
+# app.py
+# PESONet & InstaPay Dashboard
+# Streamlit app to visualize monthly, quarterly, annual, YTM, and YTD metrics
+# for Volume and Value using "PN and IP Database.xlsx".
+
+from __future__ import annotations
+
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Tuple
 
+import numpy as np
 import pandas as pd
-import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 # =========================
 # App config
 # =========================
-st.set_page_config(page_title="ASEAN Regulatory Dashboard", layout="wide")
-st.title("ASEAN Regulatory Dashboard")
-st.caption("v2 • 2026-01-30")
+st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
+st.title("PESONet & InstaPay Dashboard")
+st.caption("v1 • built for PN & IP Database")
 
-DATA_FILE = "CBregs.xlsx"  
+DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
 
 # =========================
 # Helpers
 # =========================
-ASEAN_FLAG = {
-    "Brunei Darussalam": "🇧🇳",
-    "Cambodia": "🇰🇭",
-    "Indonesia": "🇮🇩",
-    "Lao PDR": "🇱🇦",
-    "Laos": "🇱🇦",
-    "Malaysia": "🇲🇾",
-    "Myanmar": "🇲🇲",
-    "Philippines": "🇵🇭",
-    "Singapore": "🇸🇬",
-    "Thailand": "🇹🇭",
-    "Viet Nam": "🇻🇳",
-    "Vietnam": "🇻🇳",
-    "Timor-Leste": "🇹🇱",
-}
-
-META_COL_CANDIDATES = {
-    "country": ["country", "Country"],
-    "regulator": ["regulator", "Regulator"],
-    "year": ["year", "Year", "Year approved/implemented", "Year Approved/Implemented", "Year approved / implemented"],
-    "source": ["source", "Official Source", "Official source", "Official Source links", "Official source links", "Source", "URL", "Link"],
-    "title": [
-        "title",
-        "Regulation / Legal Instrument",
-        "Regulation / Legal instrument",
-        "Primary Legal / Regulatory Framework",
-        "Primary Legal/Regulatory Framework",
-        "Regulations on fraud risk management",
-        "Regulations on consumer protection (payments)",
-        "Regulation",
-        "Legal Instrument",
-    ],
-}
-
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
-    return df
-
-def extract_year(value) -> Optional[int]:
-    if pd.isna(value):
-        return None
-    s = str(value).strip()
-    m = re.search(r"(19\d{2}|20\d{2})", s)
-    return int(m.group(1)) if m else None
-
-def pick_first_existing_col(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
-    for c in candidates:
-        if c in df.columns:
-            return c
-    return None
-
-def infer_title_col(df: pd.DataFrame) -> Optional[str]:
-    # 1) Try known title candidates
-    c = pick_first_existing_col(df, META_COL_CANDIDATES["title"])
-    if c:
-        return c
-
-    # 2) Fallback: pick first non-meta-ish column with text values
-    known_meta = set(META_COL_CANDIDATES["country"] + META_COL_CANDIDATES["regulator"] +
-                     META_COL_CANDIDATES["year"] + META_COL_CANDIDATES["source"] + ["Regulation ID"])
-    for col in df.columns:
-        if col in known_meta:
-            continue
-        # Heuristic: choose first column that looks like a name/title field (string-ish)
-        if df[col].astype(str).str.len().mean() > 5:
-            return col
-    return None
-
-def safe_linkify(url: str) -> str:
-    url = str(url).strip()
-    if not url or url.lower() in {"nan", "none"}:
-        return ""
-    # Keep as markdown link; display a compact label
-    return f"[Source]({url})"
-
 @st.cache_data
-def load_cbregs(file_path: str, file_mtime: float) -> pd.DataFrame:
+def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
+    """
+    Loads both sheets (PESONet, InstaPay) and returns a dict of cleaned DataFrames.
+    Expected columns: Period, Volume, Value, %Change in Vol, %Change in Val, Last12MTH, Quarter
+    """
     p = Path(file_path)
     if not p.exists():
-        # common Streamlit Cloud pattern: relative to app file
+        # common Streamlit Cloud pattern: relative to app file location
         p = Path(__file__).parent / file_path
 
     xls = pd.ExcelFile(p, engine="openpyxl")
-    frames = []
+    out = {}
 
     for sheet in xls.sheet_names:
         df = pd.read_excel(p, sheet_name=sheet, engine="openpyxl")
-        df = normalize_columns(df).dropna(how="all").dropna(axis=1, how="all")
+        # Standardize column names
+        df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
 
-        country_col = pick_first_existing_col(df, META_COL_CANDIDATES["country"])
-        regulator_col = pick_first_existing_col(df, META_COL_CANDIDATES["regulator"])
-        year_col = pick_first_existing_col(df, META_COL_CANDIDATES["year"])
-        source_col = pick_first_existing_col(df, META_COL_CANDIDATES["source"])
-        title_col = infer_title_col(df)
+        # Only keep expected columns if present
+        keep = [c for c in ["Period", "Volume", "Value", "%Change in Vol", "%Change in Val", "Last12MTH", "Quarter"] if c in df.columns]
+        df = df[keep].copy()
 
-        # Build standardized view while retaining originals for the country modal
-        out = df.copy()
-        out["Category"] = sheet
+        # Parse dates
+        if "Period" in df.columns:
+            df["Period"] = pd.to_datetime(df["Period"], errors="coerce")
 
-        out["Country_std"] = out[country_col] if country_col else pd.NA
-        out["Regulator_std"] = out[regulator_col] if regulator_col else pd.NA
-        out["Year_raw"] = out[year_col] if year_col else pd.NA
-        out["Year"] = out["Year_raw"].apply(extract_year).astype("Int64")
+        # Coerce numerics
+        for c in ["Volume", "Value", "%Change in Vol", "%Change in Val", "Last12MTH"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
 
-        if title_col:
-            out["Regulation_Title"] = out[title_col].astype(str)
-        else:
-            out["Regulation_Title"] = pd.NA
+        # Clean Quarter text (extract YYYY-Q#)
+        if "Quarter" in df.columns:
+            df["Quarter"] = (
+                df["Quarter"]
+                .astype(str)
+                .str.extract(r"((?:19|20)\d{2}\-Q[1-4])", expand=False)
+            )
 
-        if source_col:
-            out["Source_URL"] = out[source_col].astype(str)
-        else:
-            out["Source_URL"] = pd.NA
+        # Derive convenience fields
+        if "Period" in df.columns:
+            df["Year"] = df["Period"].dt.year
+            df["Month"] = df["Period"].dt.month
+            df["MonthName"] = df["Period"].dt.strftime("%b")
+            df["YearMonth"] = df["Period"].dt.to_period("M").dt.to_timestamp()
+            df["YearQ"] = df["Period"].dt.to_period("Q").astype(str)  # e.g., '2024Q1'
+            # Make YearQ consistent with 'YYYY-Q#' style
+            df["YearQ"] = df["YearQ"].str.replace("Q", "-Q", regex=False)
 
-        frames.append(out)
+        out[sheet] = df.sort_values("Period")
 
-    all_df = pd.concat(frames, ignore_index=True)
-
-    # Clean
-    all_df["Country_std"] = all_df["Country_std"].astype(str).str.strip()
-    all_df["Regulator_std"] = all_df["Regulator_std"].astype(str).str.strip()
-    all_df["Regulation_Title"] = all_df["Regulation_Title"].astype(str).str.strip()
-
-    # Treat "nan" strings produced by astype(str)
-    for c in ["Country_std", "Regulator_std", "Regulation_Title", "Source_URL"]:
-        all_df.loc[all_df[c].str.lower().isin(["nan", "none"]), c] = pd.NA
-
-    return all_df
+    return out
 
 
-def latest_regs_by_country(df: pd.DataFrame, country: str, n: int = 10) -> pd.DataFrame:
-    d = df[df["Country_std"] == country].copy()
-    d = d.dropna(subset=["Regulation_Title"])
-    # Year might be NA; put those last
-    d["Year_sort"] = d["Year"].fillna(-1).astype(int)
-    d = d.sort_values(["Year_sort", "Regulation_Title"], ascending=[False, True])
-    return d.head(n)[["Year", "Regulation_Title", "Category", "Regulator_std", "Source_URL"]]
+def _format_num(x: float | int, is_money: bool = False) -> str:
+    if pd.isna(x):
+        return "—"
+    if is_money:
+        # Philippine peso style with thousands separator; no currency symbol in chart labels to keep clean
+        return f"₱{x:,.0f}"
+    return f"{x:,.0f}"
 
 
-def build_hover_list(df_country_latest: pd.DataFrame) -> str:
-    if df_country_latest.empty:
-        return "No regulations found."
-    lines = []
-    for _, r in df_country_latest.iterrows():
-        y = r["Year"]
-        y_txt = str(int(y)) if pd.notna(y) else "—"
-        title = str(r["Regulation_Title"])
-        lines.append(f"{y_txt} — {title}")
-    # Plotly hover supports <br>
-    return "<br>".join(lines)
+def _agg_quarterly(df: pd.DataFrame) -> pd.DataFrame:
+    g = df.groupby(["YearQ"], as_index=False).agg({"Volume": "sum", "Value": "sum"})
+    # Also keep Year and quarter number for sorting and display
+    yq = g["YearQ"].str.extract(r"((\d{4})\-Q([1-4]))")
+    g["Year"] = yq[1].astype(int)
+    g["Qtr"] = yq[2].astype(int)
+    return g.sort_values(["Year", "Qtr"])
+
+
+def _agg_annual(df: pd.DataFrame) -> pd.DataFrame:
+    g = df.groupby(["Year"], as_index=False).agg({"Volume": "sum", "Value": "sum"})
+    return g.sort_values("Year")
+
+
+def _ytm(df: pd.DataFrame, end_ts: pd.Timestamp) -> Tuple[float, float]:
+    """
+    YTM (Year-to-Month): Jan..end_month of end_ts within end_ts.year.
+    Returns (vol_sum, val_sum).
+    """
+    m_end = end_ts.month
+    y_end = end_ts.year
+    d = df[(df["Year"] == y_end) & (df["Month"] <= m_end)]
+    return d["Volume"].sum(), d["Value"].sum()
+
+
+def _ytd(df: pd.DataFrame, end_ts: pd.Timestamp) -> Tuple[float, float]:
+    """
+    YTD: Jan..end_date (same as YTM at month granularity; kept separate for clarity).
+    """
+    return _ytm(df, end_ts)
+
+
+def _safe_pct(new: float, base: float) -> float | None:
+    if base is None or base == 0 or pd.isna(base):
+        return None
+    return (new - base) / base
+
+
+def _month_range_slider(df: pd.DataFrame, key_prefix: str = "") -> Tuple[pd.Timestamp, pd.Timestamp]:
+    min_d = df["Period"].min()
+    max_d = df["Period"].max()
+    st.sidebar.caption("**Select month range**")
+    start, end = st.sidebar.slider(
+        "Period",
+        min_value=min_d.to_pydatetime(),
+        max_value=max_d.to_pydatetime(),
+        value=(min_d.to_pydatetime(), max_d.to_pydatetime()),
+        format="YYYY-MM",
+        key=f"{key_prefix}_range",
+    )
+    return pd.to_datetime(start), pd.to_datetime(end)
+
+
+def _months_of_year_multiselect() -> set[int]:
+    st.sidebar.caption("**Optionally filter by months of the year**")
+    months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    chosen = st.sidebar.multiselect(
+        "Months (optional)",
+        options=months,
+        default=months,
+    )
+    m2num = {m:i+1 for i,m in enumerate(months)}
+    return {m2num[m] for m in chosen}
+
+
+def _dual_axis_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
+    """
+    Left axis: Volume; Right axis: Value
+    """
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=df["Period"], y=df["Volume"], mode="lines+markers",
+            name="Volume", line=dict(color="#1f77b4"), hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>"
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df["Period"], y=df["Value"], mode="lines+markers",
+            name="Value (₱)", line=dict(color="#ff7f0e"), hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.0f}<extra></extra>"
+        ),
+        secondary_y=True,
+    )
+    fig.update_layout(
+        title=title,
+        hovermode="x unified",
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    fig.update_yaxes(title_text="Volume (count)", secondary_y=False, rangemode="tozero")
+    fig.update_yaxes(title_text="Value (₱)", secondary_y=True, rangemode="tozero")
+    return fig
 
 
 # =========================
 # Load data
 # =========================
-# df_all = load_cbregs(DATA_FILE)
-p = Path(DATA_FILE)
-if not p.exists():
-    p = Path(__file__).parent / DATA_FILE
+data = _load_excel(DATA_FILE)
 
-df_all = load_cbregs(DATA_FILE, p.stat().st_mtime)
-
-if df_all.empty:
-    st.error("Data loaded but produced no rows.")
+if not data:
+    st.error("Could not load any data from the Excel file.")
     st.stop()
 
+AVAILABLE_SERIES = list(data.keys())  # e.g., ["PESONet", "InstaPay"]
+
+
 # =========================
-# Sidebar filters (ORDER: Category -> Year -> Country -> Regulator)
+# Sidebar controls
 # =========================
-st.sidebar.header("Filters")
+st.sidebar.header("Controls")
 
-categories = ["All"] + sorted(df_all["Category"].dropna().unique().tolist())
-sel_category = st.sidebar.selectbox("Category", options=categories, index=0)
+series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0)
+df0 = data[series].copy()
 
-df_f = df_all.copy()
-if sel_category != "All":
-    df_f = df_f[df_f["Category"] == sel_category]
+if df0.empty:
+    st.warning("The selected series has no rows.")
+    st.stop()
 
-# # Year slider
-# years = df_f["Year"].dropna().astype(int)
-# if len(years) > 0:
-#     y_min, y_max = int(years.min()), int(years.max())
-#     sel_year = st.sidebar.slider("Year", min_value=y_min, max_value=y_max, value=(y_min, y_max))
-#     df_f = df_f[df_f["Year"].notna()]
-#     df_f = df_f[(df_f["Year"] >= sel_year[0]) & (df_f["Year"] <= sel_year[1])]
-# else:
-#     st.sidebar.caption("No parseable years found in the current category filter.")
+# Month range slider and Month-of-year multiselect
+start_ts, end_ts = _month_range_slider(df0, key_prefix=series)
+allowed_months = _months_of_year_multiselect()
 
-# countries = sorted(df_f["Country_std"].dropna().unique().tolist())
-# sel_countries = st.sidebar.multiselect("Country", options=countries, default=countries)
-# if sel_countries:
-#     df_f = df_f[df_f["Country_std"].isin(sel_countries)]
+# Apply filters
+df = df0[(df0["Period"] >= start_ts) & (df0["Period"] <= end_ts)]
+df = df[df["Month"].isin(allowed_months)]
 
-countries = sorted(df_f["Country_std"].dropna().unique().tolist())
-
-# ---- init defaults (must happen BEFORE widgets with these keys are created)
-st.session_state.setdefault("country_select_all", True)
-st.session_state.setdefault("selected_countries", countries.copy())
-
-# Keep selected list valid when category changes
-st.session_state["selected_countries"] = [
-    c for c in st.session_state["selected_countries"] if c in countries
-]
-if not st.session_state["selected_countries"]:
-    st.session_state["selected_countries"] = countries.copy()
-
-def _toggle_select_all():
-    if st.session_state["country_select_all"]:
-        st.session_state["selected_countries"] = countries.copy()
-
-def _countries_changed():
-    st.session_state["country_select_all"] = (
-        set(st.session_state["selected_countries"]) == set(countries)
-    )
-
-# ---- widgets
-st.sidebar.checkbox(
-    "Select all countries",
-    key="country_select_all",
-    on_change=_toggle_select_all,
-)
-
-st.sidebar.multiselect(
-    "Country",
-    options=countries,
-    key="selected_countries",
-    on_change=_countries_changed,
-)
-
-# ---- apply filter
-if st.session_state["selected_countries"]:
-    df_f = df_f[df_f["Country_std"].isin(st.session_state["selected_countries"])]
-
-
-
-# regulators = sorted(df_f["Regulator_std"].dropna().unique().tolist())
-# sel_regulators = st.sidebar.multiselect("Regulator", options=regulators, default=regulators)
-# if sel_regulators:
-#     df_f = df_f[df_f["Regulator_std"].isin(sel_regulators)]
-
-# # Basic KPI
-# k1, k2, k3 = st.columns(3)
-# k1.metric("Regulations (rows)", f"{len(df_f):,}")
-# k2.metric("Countries", f"{df_f['Country_std'].nunique():,}")
-# k3.metric("Regulators", f"{df_f['Regulator_std'].nunique():,}")
+if df.empty:
+    st.info("No data for the chosen filters.")
+    st.stop()
 
 st.divider()
 
-# =========================
-# Tabs (Map default)
-# =========================
-tab_map, tab_table = st.tabs(["Map", "Table"])
 
 # =========================
-# MAP TAB
+# KPIs
 # =========================
-with tab_map:
-    # st.subheader("")
+latest_period = df["Period"].max()
 
-    # Country counts + hover preview
-    by_country = (
-        df_f.groupby("Country_std", dropna=False)
-        .size()
-        .reset_index(name="Regulation_Count")
-        .rename(columns={"Country_std": "Country"})
-    )
+# Selected window totals
+sel_vol = df["Volume"].sum()
+sel_val = df["Value"].sum()
 
-    # Build hover text = latest 10 regs per country
-    hover_texts = []
-    for c in by_country["Country"].tolist():
-        latest10 = latest_regs_by_country(df_f, c, n=10)
-        hover_texts.append(build_hover_list(latest10))
-    by_country["Latest_10"] = hover_texts
+# YTM (current year to selected month)
+ytm_vol, ytm_val = _ytm(df0, latest_period)
 
-    # # Choropleth
-    # fig = px.choropleth(
-    #     by_country,
-    #     locations="Country",
-    #     locationmode="country names",
-    #     color="Regulation_Count",
-    #     hover_name="Country",
-    #     hover_data={"Regulation_Count": True, "Latest_10": True, "Country": False},
-    # )
+# YTM (previous year to the same month) for YoY
+prev_ref = latest_period.replace(year=latest_period.year - 1)
+ytm_prev_vol, ytm_prev_val = _ytm(df0, prev_ref)
 
-    # Neutral shading (no ranking): single constant value
-    by_country["_fill"] = 1
-    
-    # fig = px.choropleth(
-    #     by_country,
-    #     locations="Country",
-    #     locationmode="country names",
-    #     color="_fill",  # constant -> no meaningful gradient
-    #     hover_name="Country",
-    #     hover_data={"Latest_10": True, "Country": False},  # remove Regulation_Count from hover too
-    # )
+ytm_vol_yoy = _safe_pct(ytm_vol, ytm_prev_vol)
+ytm_val_yoy = _safe_pct(ytm_val, ytm_prev_val)
 
-    fig = px.choropleth(
-    by_country,
-    locations="Country",
-    locationmode="country names",
-    color="_fill",
-    custom_data=["Latest_10"],     # <-- add this
-    )
+# YTD (same as YTM at monthly granularity; separated for explicit display)
+ytd_vol, ytd_val = _ytd(df0, latest_period)
 
-    fig.update_traces(
-    hovertemplate="%{location}<br>%{customdata[0]}<extra></extra>"
-    )
-    
-    # Remove legend/colorbar entirely |dispable box/lasso zoom
-    fig.update_layout(
-        hoverlabel=dict(align="left"),
-        dragmode=False,
-        hovermode='closest',
-        coloraxis_showscale=False,
-        xaxis=dict(fixedrange=True),
-        yaxis=dict(fixedrange=True))
-    
-    fig.update_xaxes(fixedrange=True)
-    fig.update_yaxes(fixedrange=True)
-    
-    
+# Latest quarter and annual context (based on full dataset, not only filtered range)
+q_agg = _agg_quarterly(df0)
+a_agg = _agg_annual(df0)
 
-    fig.update_geos(
-        scope="asia",
-        projection_type="mercator",
-    
-        # --- LOCK ASEAN VIEWPORT ---
-        lonaxis=dict(range=[92, 141]),
-        lataxis=dict(range=[-11, 24]),
-    
-        # --- Disable interactions ---
-        visible=True,
-        showcoastlines=True,
-        coastlinecolor="rgba(255,255,255,0.35)",
-        showcountries=True,
-        countrycolor="rgba(255,255,255,0.85)",
-        showland=True,
-        landcolor="rgba(20, 30, 45, 1)",
-        showocean=True,
-        oceancolor="rgba(10, 16, 26, 1)",
-        showlakes=True,
-        lakecolor="rgba(10, 16, 26, 1)",
-        bgcolor="rgba(0,0,0,0)",
-    )
-
-
-
-
-
-    fig.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=0, r=0, t=0, b=0),
-        height=560,
-    )
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True,
-        config={
-            "displayModeBar": False,      # removes zoom / pan / lasso / camera icons
-            "scrollZoom": False,         # disables scroll wheel zoom
-            "doubleClick": False,        # disables double-click zoom reset
-        }
-    )
-
-
-    st.caption("Hover a country to preview its 10 most recent regulations (based on the current filters).")
-
-    # Country selector to open modal (map click is harder without extra packages)
-    map_country = st.selectbox("Open a country details popup", options=["(Select)"] + sorted(by_country["Country"].tolist()))
-    if map_country != "(Select)":
-        st.session_state["selected_country"] = map_country
-
-
-# =========================
-# TABLE TAB
-# =========================
-# with tab_table:
-#     # st.subheader("")
-
-#     # Build per-country summary table:
-#     # columns: Flag, Country (with Regulator), counts per each worksheet name
-#     all_sheet_names = sorted(df_all["Category"].dropna().unique().tolist())
-
-#     regs_by_country = (
-#         df_f.groupby("Country_std")["Regulator_std"]
-#         .apply(lambda x: ", ".join(sorted(set([v for v in x.dropna().tolist()]))))
-#         .reset_index()
-#         .rename(columns={"Country_std": "Country", "Regulator_std": "Regulator"})
-#     )
-
-#     # counts = (
-#     #     df_f.groupby(["Country_std", "Category"])
-#     #     .size()
-#     #     .reset_index(name="Count")
-#     #     .pivot(index="Country_std", columns="Category", values="Count")
-#     #     .fillna(0)
-#     #     .astype(int)
-#     #     .reset_index()
-#     #     .rename(columns={"Country_std": "Country"})
-#     # )
-
-#     counts = (
-#     df_f.groupby(["Country_std", "Category"])
-#     .size()
-#     .reset_index(name="Count")
-#     .assign(HasReg=True)  # anything present becomes True
-#     .pivot(index="Country_std", columns="Category", values="HasReg")
-#     .fillna(False)
-#     .astype(bool)
-#     .reset_index()
-#     .rename(columns={"Country_std": "Country"})
-#     )    
-
-#     t = regs_by_country.merge(counts, on="Country", how="outer").fillna({"Regulator": ""})
-#     for s in all_sheet_names:
-#         if s not in t.columns:
-#             # t[s] = 0
-#             t[s] = False
-
-#     t.insert(0, "Flag", t["Country"].map(lambda x: ASEAN_FLAG.get(str(x), "🏳️")))
-#     t = t[["Flag", "Country", "Regulator"] + all_sheet_names].sort_values("Country")
-
-#     # Use dataframe selection; show preview + open modal
-#     st.caption("Select a row to preview and open a country popup.")
-#     # event = st.dataframe(
-#     #     t,
-#     #     use_container_width=True,
-#     #     hide_index=True,
-#     #     on_select="rerun",
-#     #     selection_mode="single-row",
-#     #     height=520,
-#     # )
-
-#     CHECK = "✓"
-#     BLANK = ""
-
-#     for s in all_sheet_names:
-#         t[s] = t[s].map(lambda x: CHECK if x else BLANK)
-
-#     event = st.dataframe(
-#     t,
-#     use_container_width=True,
-#     hide_index=True,
-#     on_select="rerun",
-#     selection_mode="single-row",
-#     height=520,
-#     )
-
-
-#     if event and event.selection and event.selection.get("rows"):
-#         idx = event.selection["rows"][0]
-#         selected_country = t.iloc[idx]["Country"]
-#         st.session_state["selected_country"] = selected_country
-
-#         # Preview
-#         st.markdown(f"### Preview: {selected_country}")
-#         latest10 = latest_regs_by_country(df_f, selected_country, n=10)
-#         if latest10.empty:
-#             st.info("No regulations found for this country under the current filters.")
-#         else:
-#             preview_lines = []
-#             for _, r in latest10.iterrows():
-#                 y = r["Year"]
-#                 y_txt = str(int(y)) if pd.notna(y) else "—"
-#                 preview_lines.append(f"- **{y_txt}** — {r['Regulation_Title']}")
-#             st.markdown("\n".join(preview_lines))
-
-with tab_table:
-    all_sheet_names = sorted(df_all["Category"].dropna().unique().tolist())
-
-    # =========================================================
-    # MODE A: Category = All -> keep your current summary matrix
-    # =========================================================
-    if sel_category == "All":
-        regs_by_country = (
-            df_f.groupby("Country_std")["Regulator_std"]
-            .apply(lambda x: ", ".join(sorted(set([v for v in x.dropna().tolist()]))))
-            .reset_index()
-            .rename(columns={"Country_std": "Country", "Regulator_std": "Regulator"})
-        )
-
-        counts = (
-            df_f.groupby(["Country_std", "Category"])
-            .size()
-            .reset_index(name="Count")
-            .assign(HasReg=True)
-            .pivot(index="Country_std", columns="Category", values="HasReg")
-            .fillna(False)
-            .astype(bool)
-            .reset_index()
-            .rename(columns={"Country_std": "Country"})
-        )
-
-        t = regs_by_country.merge(counts, on="Country", how="outer").fillna({"Regulator": ""})
-        for s in all_sheet_names:
-            if s not in t.columns:
-                t[s] = False
-
-        t.insert(0, "Flag", t["Country"].map(lambda x: ASEAN_FLAG.get(str(x), "🏳️")))
-        t = t[["Flag", "Country", "Regulator"] + all_sheet_names].sort_values("Country")
-
-        CHECK, BLANK = "✓", ""
-        for s in all_sheet_names:
-            t[s] = t[s].map(lambda x: CHECK if x else BLANK)
-
-        st.caption("Select a row to preview and open a country popup.")
-        event = st.dataframe(
-            t,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            height=520,
-        )
-
-        if event and event.selection and event.selection.get("rows"):
-            idx = event.selection["rows"][0]
-            selected_country = t.iloc[idx]["Country"]
-            st.session_state["selected_country"] = selected_country
-
-            st.markdown(f"### Preview: {selected_country}")
-            latest10 = latest_regs_by_country(df_f, selected_country, n=10)
-            if latest10.empty:
-                st.info("No regulations found for this country under the current filters.")
-            else:
-                preview_lines = []
-                for _, r in latest10.iterrows():
-                    y = r["Year"]
-                    y_txt = str(int(y)) if pd.notna(y) else "—"
-                    preview_lines.append(f"- **{y_txt}** — {r['Regulation_Title']}")
-                st.markdown("\n".join(preview_lines))
-
-    # =========================================================
-    # MODE B: Category selected -> show actual worksheet columns
-    # =========================================================
+if not q_agg.empty:
+    last_q = q_agg.iloc[-1]
+    q_vol, q_val = last_q["Volume"], last_q["Value"]
+    if len(q_agg) >= 2:
+        prev_q = q_agg.iloc[-2]
+        q_vol_qoq = _safe_pct(q_vol, prev_q["Volume"])
+        q_val_qoq = _safe_pct(q_val, prev_q["Value"])
     else:
-        st.caption(f"Showing worksheet fields for: {sel_category}")
-        
-        d = df_f.copy()
-        
-        regs_by_country = (
-            d.groupby("Country_std")["Regulator_std"]
-            .apply(lambda x: ", ".join(sorted(set([v for v in x.dropna().tolist()]))))
-            .reset_index()
-            .rename(columns={"Country_std": "Country", "Regulator_std": "Regulator"})
-        )
+        q_vol_qoq = q_val_qoq = None
+else:
+    q_vol = q_val = q_vol_qoq = q_val_qoq = None
 
-        cols_to_concat = d.drop(columns=['ID', 'title', 'year', 'Year', 'Year_raw', 'source', 
-                                         'country', 'regulator','Category','Country_std', 'Regulator_std', 
-                                         'Source_URL']).columns
-        provs = (
-            d
-            .drop(columns=['ID', 'title', 'year', 'source'])
-            .groupby(['Country_std','Category'], dropna=False)
-            .agg({
-                c: lambda x: (
-                    pd.NA
-                    if x.dropna().empty
-                    else " | ".join(x.dropna().astype(str).str.strip().unique())
-                )
-                for c in cols_to_concat
-            })
-            .reset_index().rename(columns={"Country_std": "Country"})
-        )
+if not a_agg.empty:
+    last_a = a_agg.iloc[-1]
+    a_vol, a_val = last_a["Volume"], last_a["Value"]
+    if len(a_agg) >= 2:
+        prev_a = a_agg.iloc[-2]
+        a_vol_yoy = _safe_pct(a_vol, prev_a["Volume"])
+        a_val_yoy = _safe_pct(a_val, prev_a["Value"])
+    else:
+        a_vol_yoy = a_val_yoy = None
+else:
+    a_vol = a_val = a_vol_yoy = a_val_yoy = None
 
-        t = regs_by_country.merge(provs, on="Country", how="outer").fillna({"Regulator": ""})
-        # for s in all_sheet_names:
-        #     if s not in t.columns:
-        #         t[s] = False
+# KPI layout
+k1, k2, k3, k4 = st.columns(4)
+k1.metric(f"Selected Window Volume ({series})", _format_num(sel_vol), help="Sum of Volume within the selected month range.")
+k2.metric(f"Selected Window Value ({series})", _format_num(sel_val, is_money=True), help="Sum of Value within the selected month range.")
+k3.metric(f"YTM {latest_period.strftime('%Y-%m')} Volume", _format_num(ytm_vol), f"{'' if ytm_vol_yoy is None else f'{ytm_vol_yoy*100:,.1f}% YoY'}", help="Jan..selected month of current year vs same months last year.")
+k4.metric(f"YTM {latest_period.strftime('%Y-%m')} Value", _format_num(ytm_val, is_money=True), f"{'' if ytm_val_yoy is None else f'{ytm_val_yoy*100:,.1f}% YoY'}", help="Jan..selected month of current year vs same months last year.")
 
-        t.insert(0, "Flag", t["Country"].map(lambda x: ASEAN_FLAG.get(str(x), "🏳️")))
-        t = (t[["Flag", "Country", "Regulator"] 
-             + [col for col in t.columns if col not in ["Flag", "Country", "Regulator", "Category", "Regulation_Title"]]]
-             .sort_values("Country").dropna(axis=1, how="all"))
+k5, k6, k7, k8 = st.columns(4)
+k5.metric("Latest Quarter Volume", _format_num(q_vol), f"{'' if q_vol_qoq is None else f'{q_vol_qoq*100:,.1f}% QoQ'}")
+k6.metric("Latest Quarter Value", _format_num(q_val, is_money=True), f"{'' if q_val_qoq is None else f'{q_val_qoq*100:,.1f}% QoQ'}")
+k7.metric("Latest Year Volume", _format_num(a_vol), f"{'' if a_vol_yoy is None else f'{a_vol_yoy*100:,.1f}% YoY'}")
+k8.metric("Latest Year Value", _format_num(a_val, is_money=True), f"{'' if a_val_yoy is None else f'{a_val_yoy*100:,.1f}% YoY'}")
 
-        # CHECK, BLANK = "✓", ""
-        # for s in [col for col in t.columns if col not in ["Flag", "Country", "Regulator"]]:
-        #     t[s] = t[s].map(lambda x: CHECK if x else BLANK)
+with st.expander("Definitions"):
+    st.markdown(
+        """
+- **Quarterly**: Sum of monthly Volume/Value per calendar quarter  
+- **Annual**: Sum of monthly Volume/Value per calendar year  
+- **YTM (Year-to-Month)**: From **January** to the **selected month** of the **current year**, with YoY vs the same Jan–month range last year  
+- **YTD (Year-to-Date)**: Same range as YTM at monthly granularity (shown here explicitly)
+        """
+    )
 
-        st.caption("Select a row to preview and open a country popup.")
-        event = st.dataframe(
-            t,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            height=520,
-        )
-
-        if event and event.selection and event.selection.get("rows"):
-            idx = event.selection["rows"][0]
-            selected_country = t.iloc[idx]["Country"]
-            st.session_state["selected_country"] = selected_country
-
-            st.markdown(f"### Preview: {selected_country}")
-            latest10 = latest_regs_by_country(df_f, selected_country, n=10)
-            if latest10.empty:
-                st.info("No regulations found for this country under the current filters.")
-            else:
-                preview_lines = []
-                for _, r in latest10.iterrows():
-                    y = r["Year"]
-                    y_txt = str(int(y)) if pd.notna(y) else "—"
-                    preview_lines.append(f"- **{y_txt}** — {r['Regulation_Title']}")
-                st.markdown("\n".join(preview_lines))
-
-        # d = df_f.copy()  # already filtered to sel_category earlier in your code
-
-        # # Show actual worksheet columns; drop std/helper cols to avoid name collisions (Country/Regulator/Year exist already)
-        # drop_cols = {"Category", "Country_std", "Regulator_std", "Year_raw", "Source_URL"}
-        # d = d.drop(columns=[c for c in drop_cols if c in d.columns], errors="ignore")
-
-        # # Optional: make official source clickable if that column exists
-        # column_config = {}
-        # if "Official Source" in d.columns:
-        #     column_config["Official Source"] = st.column_config.LinkColumn("Official Source", display_text="Source")
-        # elif "Official source" in d.columns:
-        #     column_config["Official source"] = st.column_config.LinkColumn("Official source", display_text="Source")
-
-        # st.dataframe(
-        #     d,
-        #     use_container_width=True,
-        #     hide_index=True,
-        #     height=560,
-        #     column_config=column_config,
-        # )
+st.divider()
 
 
 # =========================
-# Country popup (modal)
+# Chart
 # =========================
-@st.dialog("Country regulations")
-def country_dialog(country: str):
-    st.markdown(f"## {ASEAN_FLAG.get(country, '🏳️')} {country}")
+st.subheader(f"Monthly Trend — {series}")
+fig = _dual_axis_chart(df, title=f"{series} Volume & Value")
+st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    d = df_f[df_f["Country_std"] == country].copy()
-    if d.empty:
-        st.info("No regulations found for this country under the current filters.")
-        return
 
-    # Quick header info
-    regs = sorted(set([x for x in d["Regulator_std"].dropna().tolist()]))
-    st.markdown("**Regulator:** " + (", ".join(regs) if regs else "—"))
-    # st.markdown(f"**Total regulations (rows):** {len(d):,}")
+# =========================
+# Aggregations
+# =========================
+tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"])
 
-    # Show grouped by category
-    for cat in sorted(d["Category"].dropna().unique().tolist()):
-        st.markdown(f"### {cat}")
-    
-        dc = d[d["Category"] == cat].copy()
-        dc["Year_sort"] = dc["Year"].fillna(-1).astype(int)
-        dc = dc.sort_values(["Year_sort", "Regulation_Title"], ascending=[False, True])
-    
-        # Columns we don't want to show as "extra details"
-        internal_cols = {
-            "Category", "Country_std", "Regulator_std", "Year_raw", "Year", "Year_sort",
-            "Regulation_Title", "Source_URL", 'ID', 'country', 'regulator', 'year', 'source', 'title'
+with tab_monthly:
+    show_cols = ["Period", "Volume", "Value"]
+    t = df[show_cols].copy()
+    t["Period"] = t["Period"].dt.strftime("%Y-%m")
+    st.dataframe(
+        t,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Volume": st.column_config.NumberColumn(format="%,d"),
+            "Value": st.column_config.NumberColumn(format="₱%,.0f"),
+        },
+        height=420,
+    )
+
+    csv = t.to_csv(index=False).encode("utf-8")
+    st.download_button("Download monthly (CSV)", data=csv, file_name=f"{series}_monthly_filtered.csv", mime="text/csv")
+
+with tab_quarterly:
+    tq = _agg_quarterly(df0)
+    tq_disp = tq[["YearQ", "Volume", "Value"]].rename(columns={"YearQ": "Quarter"})
+    st.dataframe(
+        tq_disp,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Volume": st.column_config.NumberColumn(format="%,d"),
+            "Value": st.column_config.NumberColumn(format="₱%,.0f"),
+        },
+        height=420,
+    )
+    csv = tq_disp.to_csv(index=False).encode("utf-8")
+    st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
+
+with tab_annual:
+    ta = _agg_annual(df0)
+    st.dataframe(
+        ta,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Volume": st.column_config.NumberColumn(format="%,d"),
+            "Value": st.column_config.NumberColumn(format="₱%,.0f"),
+        },
+        height=420,
+    )
+    csv = ta.to_csv(index=False).encode("utf-8")
+    st.download_button("Download annual (CSV)", data=csv, file_name=f"{series}_annual.csv", mime="text/csv")
+
+with tab_ytm_ytd:
+    ytm_table = pd.DataFrame(
+        {
+            "Metric": ["YTM Volume", "YTM Value", "YTM YoY", "YTD Volume", "YTD Value"],
+            "Current": [
+                ytm_vol,
+                ytm_val,
+                None if ytm_vol_yoy is None else ytm_vol_yoy,
+                ytd_vol,
+                ytd_val,
+            ],
+            "Previous (YoY base)": [
+                ytm_prev_vol,
+                ytm_prev_val,
+                None,
+                ytm_prev_vol,  # shown for context
+                ytm_prev_val,
+            ],
         }
-    
-        # Everything else from the sheet row will be shown as details
-        detail_cols = [c for c in dc.columns if c not in internal_cols]
-    
-        for i, row in dc.reset_index(drop=True).iterrows():
-            y = row["Year"]
-            y_txt = str(int(y)) if pd.notna(y) else "—"
-            title = row["Regulation_Title"] if pd.notna(row["Regulation_Title"]) else "—"
-            regulator = row["Regulator_std"] if pd.notna(row["Regulator_std"]) else "—"
-            src_md = safe_linkify(row["Source_URL"])
-    
-            header = f"{y_txt} — {title}"
-    
-            with st.expander(header, expanded=False):
-                # st.markdown(f"**Regulator:** {regulator}")
-                if src_md:
-                    st.markdown(f"**Link:** {src_md}")
-    
-                if detail_cols:
-                    # Show remaining columns as a key-value table
-                    details = (
-                        row[detail_cols]
-                        .dropna()
-                        .astype(str)
-                        .to_frame(name="Value")
-                    )
-                    details.index.name = "Field"
-                    st.dataframe(details, use_container_width=True, hide_index=False)
-                else:
-                    st.caption("No additional fields found for this row.")
+    )
+    # Pretty formatting
+    ytm_table["Current (fmt)"] = [
+        _format_num(ytm_vol),
+        _format_num(ytm_val, is_money=True),
+        "—" if ytm_vol_yoy is None else f"{ytm_vol_yoy*100:,.1f}%",
+        _format_num(ytd_vol),
+        _format_num(ytd_val, is_money=True),
+    ]
+    ytm_table["Previous (fmt)"] = [
+        _format_num(ytm_prev_vol),
+        _format_num(ytm_prev_val, is_money=True),
+        "—",
+        _format_num(ytm_prev_vol),
+        _format_num(ytm_prev_val, is_money=True),
+    ]
+    st.dataframe(
+        ytm_table[["Metric", "Current (fmt)", "Previous (fmt)"]],
+        use_container_width=True,
+        hide_index=True,
+        height=320,
+    )
 
+st.caption("Tip: Use the sidebar to switch between PESONet and InstaPay, set a month range, and optionally pick specific months of the year (e.g., only Mar, Jun, Sep, Dec).")
 
-    st.caption("Links shown as 'Source' are taken directly from the 'Official Source' column in CBregs.xlsx.")
-
-
-# Fire dialog if a country is chosen
-if "selected_country" in st.session_state and st.session_state["selected_country"]:
-    country_dialog(st.session_state["selected_country"])
-    # optional: clear after showing (keeps UX from reopening on every rerun)
-    st.session_state["selected_country"] = None

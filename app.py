@@ -249,7 +249,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     )
     fig.add_trace(line_trace, secondary_y=False) #secondary_y=False
 
-    fig.update_traces(selector=dict(type="bar"), opacity=0.55)
+    # fig.update_traces(selector=dict(type="bar"), opacity=0.55)
     fig.data = tuple(
         [t for t in fig.data if t.type == "bar"] +
         [t for t in fig.data if t.type == "scatter"]

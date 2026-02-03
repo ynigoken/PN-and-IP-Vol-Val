@@ -1,7 +1,10 @@
+
 # app.py
 # PESONet & InstaPay Dashboard
-# Streamlit app to visualize monthly, quarterly, annual, YTM, and YTD metrics
-# for Volume and Value using "PN and IP Database.xlsx".
+# Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
+# with: (a) month/year pickers, (b) selected-filter totals first,
+# (c) humanized numbers (one decimal, Million/Billion/Trillion, ₱ retained),
+# (d) tables with comma separators and Period as Jan-YYYY.
 
 from __future__ import annotations
 
@@ -20,7 +23,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1 • built for PN & IP Database")
+st.caption("v1.2 • month/year pickers • humanized KPIs • formatted tables")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -31,12 +34,12 @@ DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 @st.cache_data
 def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
     """
-    Loads both sheets (PESONet, InstaPay) and returns a dict of cleaned DataFrames.
+    Loads both sheets (e.g., PESONet, InstaPay) and returns a dict of cleaned DataFrames.
     Expected columns: Period, Volume, Value, %Change in Vol, %Change in Val, Last12MTH, Quarter
     """
     p = Path(file_path)
     if not p.exists():
-        # common Streamlit Cloud pattern: relative to app file location
+        # Streamlit Cloud pattern: relative to app file
         p = Path(__file__).parent / file_path
 
     xls = pd.ExcelFile(p, engine="openpyxl")
@@ -44,11 +47,18 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
 
     for sheet in xls.sheet_names:
         df = pd.read_excel(p, sheet_name=sheet, engine="openpyxl")
+
         # Standardize column names
         df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
 
-        # Only keep expected columns if present
-        keep = [c for c in ["Period", "Volume", "Value", "%Change in Vol", "%Change in Val", "Last12MTH", "Quarter"] if c in df.columns]
+        # Keep expected columns if present
+        keep = [
+            c for c in [
+                "Period", "Volume", "Value",
+                "%Change in Vol", "%Change in Val",
+                "Last12MTH", "Quarter"
+            ] if c in df.columns
+        ]
         df = df[keep].copy()
 
         # Parse dates
@@ -60,7 +70,7 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
 
-        # Clean Quarter text (extract YYYY-Q#)
+        # Clean Quarter text to 'YYYY-Q#'
         if "Quarter" in df.columns:
             df["Quarter"] = (
                 df["Quarter"]
@@ -75,26 +85,48 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
             df["MonthName"] = df["Period"].dt.strftime("%b")
             df["YearMonth"] = df["Period"].dt.to_period("M").dt.to_timestamp()
             df["YearQ"] = df["Period"].dt.to_period("Q").astype(str)  # e.g., '2024Q1'
-            # Make YearQ consistent with 'YYYY-Q#' style
-            df["YearQ"] = df["YearQ"].str.replace("Q", "-Q", regex=False)
+            df["YearQ"] = df["YearQ"].str.replace("Q", "-Q", regex=False)  # '2024-Q1'
 
         out[sheet] = df.sort_values("Period")
 
     return out
 
 
-def _format_num(x: float | int, is_money: bool = False) -> str:
-    if pd.isna(x):
+def _humanize(x: float | int, is_money: bool = False) -> str:
+    """
+    Formats a number with at least one decimal and suffix:
+      - < 1,000,000: 12,345.7
+      - >= 1M: 1.1 Million
+      - >= 1B: 1.1 Billion
+      - >= 1T: 1.1 Trillion
+    Always keeps '₱' for money.
+    """
+    if x is None or pd.isna(x):
         return "—"
-    if is_money:
-        # Philippine peso style with thousands separator; no currency symbol in chart labels to keep clean
-        return f"₱{x:,.0f}"
-    return f"{x:,.0f}"
+
+    absx = abs(x)
+    sign = "-" if x < 0 else ""
+    trillion = 1_000_000_000_000
+    billion  = 1_000_000_000
+    million  = 1_000_000
+
+    if absx >= trillion:
+        num = absx / trillion
+        text = f"{sign}{num:,.1f} Trillion"
+    elif absx >= billion:
+        num = absx / billion
+        text = f"{sign}{num:,.1f} Billion"
+    elif absx >= million:
+        num = absx / million
+        text = f"{sign}{num:,.1f} Million"
+    else:
+        text = f"{sign}{absx:,.1f}"
+
+    return f"₱{text}" if is_money else text
 
 
 def _agg_quarterly(df: pd.DataFrame) -> pd.DataFrame:
     g = df.groupby(["YearQ"], as_index=False).agg({"Volume": "sum", "Value": "sum"})
-    # Also keep Year and quarter number for sorting and display
     yq = g["YearQ"].str.extract(r"((\d{4})\-Q([1-4]))")
     g["Year"] = yq[1].astype(int)
     g["Qtr"] = yq[2].astype(int)
@@ -118,9 +150,7 @@ def _ytm(df: pd.DataFrame, end_ts: pd.Timestamp) -> Tuple[float, float]:
 
 
 def _ytd(df: pd.DataFrame, end_ts: pd.Timestamp) -> Tuple[float, float]:
-    """
-    YTD: Jan..end_date (same as YTM at month granularity; kept separate for clarity).
-    """
+    # Same range as YTM at monthly granularity (kept separate for clarity)
     return _ytm(df, end_ts)
 
 
@@ -130,31 +160,73 @@ def _safe_pct(new: float, base: float) -> float | None:
     return (new - base) / base
 
 
-def _month_range_slider(df: pd.DataFrame, key_prefix: str = "") -> Tuple[pd.Timestamp, pd.Timestamp]:
-    min_d = df["Period"].min()
-    max_d = df["Period"].max()
-    st.sidebar.caption("**Select month range**")
-    start, end = st.sidebar.slider(
-        "Period",
-        min_value=min_d.to_pydatetime(),
-        max_value=max_d.to_pydatetime(),
-        value=(min_d.to_pydatetime(), max_d.to_pydatetime()),
-        format="YYYY-MM",
-        key=f"{key_prefix}_range",
+def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
+    """
+    Returns a filtered DataFrame based on sidebar controls.
+      Mode A: Range (min..max month) + optional months-of-year
+      Mode B: Pick months & years (explicit)
+    """
+    st.sidebar.header("Controls")
+
+    min_d = df_for_series["Period"].min()
+    max_d = df_for_series["Period"].max()
+
+    mode = st.sidebar.radio(
+        "Filter mode",
+        options=["Range", "Pick months & years"],
+        index=0,
+        key=f"{key_prefix}_mode",
+        help="Choose a continuous date range or explicitly pick year(s) and month(s).",
     )
-    return pd.to_datetime(start), pd.to_datetime(end)
 
-
-def _months_of_year_multiselect() -> set[int]:
-    st.sidebar.caption("**Optionally filter by months of the year**")
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-    chosen = st.sidebar.multiselect(
-        "Months (optional)",
-        options=months,
-        default=months,
-    )
     m2num = {m:i+1 for i,m in enumerate(months)}
-    return {m2num[m] for m in chosen}
+
+    if mode == "Range":
+        st.sidebar.caption("**Select month range**")
+        start, end = st.sidebar.slider(
+            "Period",
+            min_value=min_d.to_pydatetime(),
+            max_value=max_d.to_pydatetime(),
+            value=(min_d.to_pydatetime(), max_d.to_pydatetime()),
+            format="YYYY-MM",
+            key=f"{key_prefix}_range",
+        )
+        allowed_months = st.sidebar.multiselect(
+            "Months (optional)",
+            options=months,
+            default=months,
+            key=f"{key_prefix}_months_optional",
+        )
+        allowed_month_nums = {m2num[m] for m in allowed_months}
+
+        d = df_for_series[
+            (df_for_series["Period"] >= pd.to_datetime(start)) &
+            (df_for_series["Period"] <= pd.to_datetime(end))
+        ]
+        d = d[d["Month"].isin(allowed_month_nums)]
+        return d
+
+    else:
+        years = sorted(df_for_series["Year"].dropna().unique().tolist())
+        sel_years = st.sidebar.multiselect(
+            "Year(s)",
+            options=years,
+            default=years[-1:],  # latest year by default
+            key=f"{key_prefix}_years",
+        )
+        sel_months = st.sidebar.multiselect(
+            "Month(s)",
+            options=months,
+            default=months,  # all months by default
+            key=f"{key_prefix}_months",
+            help="Pick specific month(s) to include. Use with Year(s) above.",
+        )
+        allowed_month_nums = {m2num[m] for m in sel_months}
+
+        d = df_for_series[df_for_series["Year"].isin(sel_years)]
+        d = d[d["Month"].isin(allowed_month_nums)]
+        return d
 
 
 def _dual_axis_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
@@ -165,14 +237,16 @@ def _dual_axis_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
     fig.add_trace(
         go.Scatter(
             x=df["Period"], y=df["Volume"], mode="lines+markers",
-            name="Volume", line=dict(color="#1f77b4"), hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>"
+            name="Volume", line=dict(color="#1f77b4"),
+            hovertemplate="%{x|%Y-%m} • Volume: %{y:,.1f}<extra></extra>"
         ),
         secondary_y=False,
     )
     fig.add_trace(
         go.Scatter(
             x=df["Period"], y=df["Value"], mode="lines+markers",
-            name="Value (₱)", line=dict(color="#ff7f0e"), hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.0f}<extra></extra>"
+            name="Value (₱)", line=dict(color="#ff7f0e"),
+            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>"
         ),
         secondary_y=True,
     )
@@ -200,24 +274,17 @@ AVAILABLE_SERIES = list(data.keys())  # e.g., ["PESONet", "InstaPay"]
 
 
 # =========================
-# Sidebar controls
+# Sidebar - choose series first
 # =========================
-st.sidebar.header("Controls")
-
-series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0)
+series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0, key="series_choice")
 df0 = data[series].copy()
 
 if df0.empty:
     st.warning("The selected series has no rows.")
     st.stop()
 
-# Month range slider and Month-of-year multiselect
-start_ts, end_ts = _month_range_slider(df0, key_prefix=series)
-allowed_months = _months_of_year_multiselect()
-
-# Apply filters
-df = df0[(df0["Period"] >= start_ts) & (df0["Period"] <= end_ts)]
-df = df[df["Month"].isin(allowed_months)]
+# Apply filter controls
+df = _filter_controls(df0, key_prefix=series)
 
 if df.empty:
     st.info("No data for the chosen filters.")
@@ -227,28 +294,35 @@ st.divider()
 
 
 # =========================
-# KPIs
+# KPIs — FIRST: Selected filter totals (as requested)
 # =========================
-latest_period = df["Period"].max()
-
-# Selected window totals
 sel_vol = df["Volume"].sum()
 sel_val = df["Value"].sum()
 
-# YTM (current year to selected month)
-ytm_vol, ytm_val = _ytm(df0, latest_period)
+k0a, k0b = st.columns(2)
+k0a.metric(f"{series} • Volume (Selected Filter)", _humanize(sel_vol),
+           help="Sum of Volume for the exact months/years you selected.")
+k0b.metric(f"{series} • Value (Selected Filter)", _humanize(sel_val, is_money=True),
+           help="Sum of Value (₱) for the exact months/years you selected.")
 
-# YTM (previous year to the same month) for YoY
+st.divider()
+
+
+# =========================
+# Additional KPIs (context)
+# =========================
+latest_period = df["Period"].max()
+
+# YTM & YTD use the full series reference
+ytm_vol, ytm_val = _ytm(df0, latest_period)
 prev_ref = latest_period.replace(year=latest_period.year - 1)
 ytm_prev_vol, ytm_prev_val = _ytm(df0, prev_ref)
 
 ytm_vol_yoy = _safe_pct(ytm_vol, ytm_prev_vol)
 ytm_val_yoy = _safe_pct(ytm_val, ytm_prev_val)
 
-# YTD (same as YTM at monthly granularity; separated for explicit display)
 ytd_vol, ytd_val = _ytd(df0, latest_period)
 
-# Latest quarter and annual context (based on full dataset, not only filtered range)
 q_agg = _agg_quarterly(df0)
 a_agg = _agg_annual(df0)
 
@@ -276,26 +350,27 @@ if not a_agg.empty:
 else:
     a_vol = a_val = a_vol_yoy = a_val_yoy = None
 
-# KPI layout
 k1, k2, k3, k4 = st.columns(4)
-k1.metric(f"Selected Window Volume ({series})", _format_num(sel_vol), help="Sum of Volume within the selected month range.")
-k2.metric(f"Selected Window Value ({series})", _format_num(sel_val, is_money=True), help="Sum of Value within the selected month range.")
-k3.metric(f"YTM {latest_period.strftime('%Y-%m')} Volume", _format_num(ytm_vol), f"{'' if ytm_vol_yoy is None else f'{ytm_vol_yoy*100:,.1f}% YoY'}", help="Jan..selected month of current year vs same months last year.")
-k4.metric(f"YTM {latest_period.strftime('%Y-%m')} Value", _format_num(ytm_val, is_money=True), f"{'' if ytm_val_yoy is None else f'{ytm_val_yoy*100:,.1f}% YoY'}", help="Jan..selected month of current year vs same months last year.")
+k1.metric(f"YTM {latest_period.strftime('%Y-%m')} Volume", _humanize(ytm_vol),
+          f"{'' if ytm_vol_yoy is None else f'{ytm_vol_yoy*100:,.1f}% YoY'}",
+          help="Jan..selected month of current year vs same months last year.")
+k2.metric(f"YTM {latest_period.strftime('%Y-%m')} Value", _humanize(ytm_val, is_money=True),
+          f"{'' if ytm_val_yoy is None else f'{ytm_val_yoy*100:,.1f}% YoY'}")
+k3.metric("Latest Quarter Volume", _humanize(q_vol), f"{'' if q_vol_qoq is None else f'{q_vol_qoq*100:,.1f}% QoQ'}")
+k4.metric("Latest Quarter Value", _humanize(q_val, is_money=True), f"{'' if q_val_qoq is None else f'{q_val_qoq*100:,.1f}% QoQ'}")
 
-k5, k6, k7, k8 = st.columns(4)
-k5.metric("Latest Quarter Volume", _format_num(q_vol), f"{'' if q_vol_qoq is None else f'{q_vol_qoq*100:,.1f}% QoQ'}")
-k6.metric("Latest Quarter Value", _format_num(q_val, is_money=True), f"{'' if q_val_qoq is None else f'{q_val_qoq*100:,.1f}% QoQ'}")
-k7.metric("Latest Year Volume", _format_num(a_vol), f"{'' if a_vol_yoy is None else f'{a_vol_yoy*100:,.1f}% YoY'}")
-k8.metric("Latest Year Value", _format_num(a_val, is_money=True), f"{'' if a_val_yoy is None else f'{a_val_yoy*100:,.1f}% YoY'}")
+k5, k6 = st.columns(2)
+k5.metric("Latest Year Volume", _humanize(a_vol), f"{'' if a_vol_yoy is None else f'{a_vol_yoy*100:,.1f}% YoY'}")
+k6.metric("Latest Year Value", _humanize(a_val, is_money=True), f"{'' if a_val_yoy is None else f'{a_val_yoy*100:,.1f}% YoY'}")
 
 with st.expander("Definitions"):
     st.markdown(
         """
-- **Quarterly**: Sum of monthly Volume/Value per calendar quarter  
-- **Annual**: Sum of monthly Volume/Value per calendar year  
-- **YTM (Year-to-Month)**: From **January** to the **selected month** of the **current year**, with YoY vs the same Jan–month range last year  
-- **YTD (Year-to-Date)**: Same range as YTM at monthly granularity (shown here explicitly)
+- **Selected Filter totals (top)**: Sum of the exact months & years you picked  
+- **Quarterly**: Sum per calendar quarter  
+- **Annual**: Sum per calendar year  
+- **YTM (Year-to-Month)**: January to the selected month of the current year; YoY vs the same Jan–month range last year  
+- **YTD (Year-to-Date)**: Same span as YTM at monthly granularity
         """
     )
 
@@ -311,28 +386,44 @@ st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
 # =========================
-# Aggregations
+# Aggregations (Tables)
 # =========================
-tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"])
+tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(
+    ["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"]
+)
 
+# ---- Monthly (filtered)
 with tab_monthly:
     show_cols = ["Period", "Volume", "Value"]
     t = df[show_cols].copy()
-    t["Period"] = t["Period"].dt.strftime("%Y-%m")
+
+    # Period as 'Jan-2023'
+    t["Period"] = t["Period"].dt.strftime("%b-%Y")
+
+    # Display with comma separators and one decimal place
     st.dataframe(
         t,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,d"),
-            "Value": st.column_config.NumberColumn(format="₱%,.0f"),
+            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
         },
         height=420,
     )
 
-    csv = t.to_csv(index=False).encode("utf-8")
-    st.download_button("Download monthly (CSV)", data=csv, file_name=f"{series}_monthly_filtered.csv", mime="text/csv")
+    # CSV export (Period also formatted)
+    t_csv = df[show_cols].copy()
+    t_csv["Period"] = t_csv["Period"].dt.strftime("%b-%Y")
+    csv = t_csv.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download monthly (CSV)",
+        data=csv,
+        file_name=f"{series}_monthly_filtered.csv",
+        mime="text/csv"
+    )
 
+# ---- Quarterly (full series context)
 with tab_quarterly:
     tq = _agg_quarterly(df0)
     tq_disp = tq[["YearQ", "Volume", "Value"]].rename(columns={"YearQ": "Quarter"})
@@ -341,14 +432,15 @@ with tab_quarterly:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,d"),
-            "Value": st.column_config.NumberColumn(format="₱%,.0f"),
+            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
         },
         height=420,
     )
     csv = tq_disp.to_csv(index=False).encode("utf-8")
     st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
 
+# ---- Annual (full series context)
 with tab_annual:
     ta = _agg_annual(df0)
     st.dataframe(
@@ -356,48 +448,37 @@ with tab_annual:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,d"),
-            "Value": st.column_config.NumberColumn(format="₱%,.0f"),
+            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Value": st.column_config.NumberColumn(format="₱%,.1f"),
         },
         height=420,
     )
     csv = ta.to_csv(index=False).encode("utf-8")
     st.download_button("Download annual (CSV)", data=csv, file_name=f"{series}_annual.csv", mime="text/csv")
 
+# ---- YTM & YTD summary table
 with tab_ytm_ytd:
     ytm_table = pd.DataFrame(
         {
             "Metric": ["YTM Volume", "YTM Value", "YTM YoY", "YTD Volume", "YTD Value"],
-            "Current": [
-                ytm_vol,
-                ytm_val,
-                None if ytm_vol_yoy is None else ytm_vol_yoy,
-                ytd_vol,
-                ytd_val,
-            ],
-            "Previous (YoY base)": [
-                ytm_prev_vol,
-                ytm_prev_val,
-                None,
-                ytm_prev_vol,  # shown for context
-                ytm_prev_val,
-            ],
+            "Current": [ytm_vol, ytm_val, None if ytm_vol_yoy is None else ytm_vol_yoy, ytd_vol, ytd_val],
+            "Previous (YoY base)": [ytm_prev_vol, ytm_prev_val, None, ytm_prev_vol, ytm_prev_val],
         }
     )
-    # Pretty formatting
+    # Humanized display columns
     ytm_table["Current (fmt)"] = [
-        _format_num(ytm_vol),
-        _format_num(ytm_val, is_money=True),
+        _humanize(ytm_vol),
+        _humanize(ytm_val, is_money=True),
         "—" if ytm_vol_yoy is None else f"{ytm_vol_yoy*100:,.1f}%",
-        _format_num(ytd_vol),
-        _format_num(ytd_val, is_money=True),
+        _humanize(ytd_vol),
+        _humanize(ytd_val, is_money=True),
     ]
     ytm_table["Previous (fmt)"] = [
-        _format_num(ytm_prev_vol),
-        _format_num(ytm_prev_val, is_money=True),
+        _humanize(ytm_prev_vol),
+        _humanize(ytm_prev_val, is_money=True),
         "—",
-        _format_num(ytm_prev_vol),
-        _format_num(ytm_prev_val, is_money=True),
+        _humanize(ytm_prev_vol),
+        _humanize(ytm_prev_val, is_money=True),
     ]
     st.dataframe(
         ytm_table[["Metric", "Current (fmt)", "Previous (fmt)"]],
@@ -406,5 +487,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Tip: Use the sidebar to switch between PESONet and InstaPay, set a month range, and optionally pick specific months of the year (e.g., only Mar, Jun, Sep, Dec).")
-
+st.caption("Tip: Choose **Range** or **Pick months & years** to filter exactly the months you want. Tables use comma separators and show Period as **Jan-YYYY**.")

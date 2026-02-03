@@ -3,8 +3,9 @@
 # PESONet & InstaPay Dashboard
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # with: (a) month/year pickers, (b) selected-filter totals first,
-# (c) humanized numbers (one decimal, Million/Billion/Trillion, ₱ retained),
-# (d) tables with comma separators and Period as Jan-YYYY.
+# (c) humanized KPIs (Million/Billion/Trillion, ₱ retained),
+# (d) tables with comma formats (Volume int, Value one-decimal),
+# (e) chart: Volume as BAR, Value as LINE.
 
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.3 • month/year pickers • humanized KPIs • formatted tables")
+st.caption("v1.4 • bar+line chart • comma-formatted tables • month/year pickers")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -229,30 +230,41 @@ def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.Da
         return d
 
 
-def _dual_axis_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
+def _bar_line_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
     """
-    Left axis: Volume; Right axis: Value
+    Volume as BAR (left y-axis), Value as LINE (right y-axis)
     """
     fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # Volume as bar (primary axis)
     fig.add_trace(
-        go.Scatter(
-            x=df["Period"], y=df["Volume"], mode="lines+markers",
-            name="Volume", line=dict(color="#1f77b4"),
-            hovertemplate="%{x|%Y-%m} • Volume: %{y:,.1f}<extra></extra>"
+        go.Bar(
+            x=df["Period"],
+            y=df["Volume"],
+            name="Volume",
+            marker_color="#1f77b4",
+            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",  # comma, no decimals
         ),
         secondary_y=False,
     )
+
+    # Value as line (secondary axis)
     fig.add_trace(
         go.Scatter(
-            x=df["Period"], y=df["Value"], mode="lines+markers",
-            name="Value (₱)", line=dict(color="#ff7f0e"),
-            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>"
+            x=df["Period"],
+            y=df["Value"],
+            mode="lines+markers",
+            name="Value (₱)",
+            line=dict(color="#ff7f0e", width=2),
+            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",  # one decimal with commas
         ),
         secondary_y=True,
     )
+
     fig.update_layout(
         title=title,
         hovermode="x unified",
+        barmode="overlay",
         margin=dict(l=10, r=10, t=50, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
@@ -294,7 +306,7 @@ st.divider()
 
 
 # =========================
-# KPIs — FIRST: Selected filter totals (as requested)
+# KPIs — FIRST: Selected filter totals
 # =========================
 sel_vol = df["Volume"].sum()
 sel_val = df["Value"].sum()
@@ -378,10 +390,10 @@ st.divider()
 
 
 # =========================
-# Chart
+# Chart (Volume = BAR, Value = LINE)
 # =========================
 st.subheader(f"Monthly Trend — {series}")
-fig = _dual_axis_chart(df, title=f"{series} Volume & Value")
+fig = _bar_line_chart(df, title=f"{series} Volume (bar) & Value (line)")
 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
@@ -400,13 +412,15 @@ with tab_monthly:
     # Period as 'Jan-2023'
     t["Period"] = t["Period"].dt.strftime("%b-%Y")
 
-    # Display with comma separators and one decimal place
+    # Display with comma separators:
+    #   Volume -> commas, no decimals (e.g., 4,278,923)
+    #   Value  -> ₱, commas, one decimal (e.g., ₱1,234,567.8)
     st.dataframe(
         t,
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Volume": st.column_config.NumberColumn(format="%,.0f"),
             "Value": st.column_config.NumberColumn(format="₱%,.1f"),
         },
         height=420,
@@ -423,7 +437,7 @@ with tab_monthly:
         mime="text/csv"
     )
 
-# ---- Quarterly (full series context; with comma separators)
+# ---- Quarterly (full series context; with comma formats)
 with tab_quarterly:
     tq = _agg_quarterly(df0)
     tq_disp = tq[["YearQ", "Volume", "Value"]].rename(columns={"YearQ": "Quarter"})
@@ -432,7 +446,7 @@ with tab_quarterly:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Volume": st.column_config.NumberColumn(format="%,.0f"),
             "Value": st.column_config.NumberColumn(format="₱%,.1f"),
         },
         height=420,
@@ -440,7 +454,7 @@ with tab_quarterly:
     csv = tq_disp.to_csv(index=False).encode("utf-8")
     st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
 
-# ---- Annual (full series context; with comma separators)
+# ---- Annual (full series context; with comma formats)
 with tab_annual:
     ta = _agg_annual(df0)
     st.dataframe(
@@ -448,7 +462,7 @@ with tab_annual:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Volume": st.column_config.NumberColumn(format="%,.1f"),
+            "Volume": st.column_config.NumberColumn(format="%,.0f"),
             "Value": st.column_config.NumberColumn(format="₱%,.1f"),
         },
         height=420,
@@ -487,4 +501,5 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Tip: Choose **Range** or **Pick months & years** to filter exactly the months you want. Tables use comma separators and show Period as **Jan-YYYY**.")
+st.caption("Tip: Use **Range** or **Pick months & years** to filter exactly the months you want. Tables show Volume as 4,278,923 (no decimals) and Value as ₱1,234,567.8.")
+``

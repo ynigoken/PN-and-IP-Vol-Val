@@ -223,19 +223,9 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # 1) VOLUME (BAR) on RIGHT  --- add FIRST (behind)
-    bar_trace = go.Bar(
-        x=df["Period"],
-        y=df["Volume"],
-        name="Volume",
-        marker_color=bar_color,
-        marker_line_color=bar_color,  # solid color
-        marker_line_width=0.0,
-        hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
-    )
-    fig.add_trace(bar_trace, secondary_y=True)
+    
 
-    # 2) VALUE (LINE) on LEFT   --- add SECOND (on top)
+    # 1) VALUE (LINE) on LEFT   --- add SECOND (on top)
     line_trace = go.Scatter(
         x=df["Period"],
         y=df["Value"],
@@ -247,6 +237,18 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         cliponaxis=False,
     )
     fig.add_trace(line_trace, secondary_y=False)
+    
+    # 2) VOLUME (BAR) on RIGHT  --- add FIRST (behind)
+    bar_trace = go.Bar(
+        x=df["Period"],
+        y=df["Volume"],
+        name="Volume",
+        marker_color=bar_color,
+        marker_line_color=bar_color,  # solid color
+        marker_line_width=0.0,
+        hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
+    )
+    fig.add_trace(bar_trace, secondary_y=True)
 
     # --- Hard guarantee the line is on top: move all scatter traces to the end of the trace list
     if any(t.type == "scatter" for t in fig.data):

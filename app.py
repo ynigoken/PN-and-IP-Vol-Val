@@ -3,8 +3,8 @@
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
 # - Humanized units: M, B, t (with ₱ for Value)
-# - PESONet: Volume (green bar, right axis 0→800M, ticks 200M); Value (dark blue line, left axis 0→1.4t, ticks 200B)
-# - InstaPay: Volume (red bar, right axis 0→800M, ticks 200M); Value (dark blue line, left axis 0→1.4t, ticks 200B)
+# - PESONet: Volume (green bar, RIGHT axis 0→10M, ticks 2M); Value (dark blue line, LEFT axis 0→1.4t, ticks 200B)
+# - InstaPay: Volume (red bar, RIGHT axis 0→800M, ticks 200M);  Value (dark blue line, LEFT axis 0→1.4t, ticks 200B)
 # - Tables: Volume as comma-int; Value as ₱ comma + 1 decimal; Period as Jan-YYYY
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.5 • colored bar+line, axis ranges & labels, M/B/t, formatted tables")
+st.caption("v1.5.1 • PESONet 0–10M @ 2M ticks • colored bar+line • formatted tables")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -164,41 +164,62 @@ def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame
     return t[cols]
 
 
-# === Axis helpers ===
-def _ticks_m(unit: str = "M") -> Tuple[List[float], List[str]]:
-    """Return tick values & labels for 0→800M every 200M."""
-    vals = [0, 200e6, 400e6, 600e6, 800e6]
-    labs = ["0"] + [f"{int(v/1e6)}{unit}" for v in vals[1:]]
-    return vals, labs
+# === Axis helpers (updated) ===
+def _ticks_custom(start: float, stop: float, step: float, unit_label: str) -> tuple[list[float], list[str]]:
+    """
+    Generic helper to produce tick values and 'pretty' labels.
+    For unit_label == "M": labels are v/1e6 + "M"
+    For unit_label == "B": labels are v/1e9 + "B"
+    """
+    vals = list(np.arange(start, stop + 0.5 * step, step))
+    if unit_label == "M":
+        labels = ["0"] + [f"{int(v/1e6)}M" for v in vals[1:]]
+    else:
+        labels = ["0"] + [f"{int(v/1e9)}B" for v in vals[1:]]
+    return vals, labels
 
-def _ticks_b(unit: str = "B") -> Tuple[List[float], List[str]]:
-    """Return tick values & labels for 0→1.4t (i.e., 1,400B) every 200B."""
-    vals = [0] + [i * 200e9 for i in range(1, 8)]  # 200B..1400B
-    labs = ["0"] + [f"{int(v/1e9)}{unit}" for v in vals[1:]]
-    return vals, labs
+def _ticks_volume_pesonet() -> tuple[list[float], list[str]]:
+    # PESONet Volume: 0..10M, step 2M
+    return _ticks_custom(0, 10e6, 2e6, "M")
+
+def _ticks_volume_default() -> tuple[list[float], list[str]]:
+    # Default Volume (InstaPay): 0..800M, step 200M
+    return _ticks_custom(0, 800e6, 200e6, "M")
+
+def _ticks_value_default() -> tuple[list[float], list[str]]:
+    # Value for all: 0..1.4t, step 200B (labels in B)
+    return _ticks_custom(0, 1.4e12, 200e9, "B")
 
 
 def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure:
     """
-    Volume = BAR on RIGHT axis (0→800M, ticks 200M as '200M' etc.)
-    Value  = LINE on LEFT axis (0→1.4t, ticks 200B as '200B' etc.)
-    Colors:
-      - PESONet: bar green, line dark blue
-      - InstaPay: bar red,   line dark blue
+    Volume = BAR on RIGHT axis; Value = LINE on LEFT axis.
+    PESONet: Volume ticks 0..10M step 2M (labels 2M, 4M, ...).
+    InstaPay: Volume ticks 0..800M step 200M.
+    Value (all): 0..1.4t step 200B (labels 200B, 400B, ...).
+    Colors: PESONet -> bar green, InstaPay -> bar red; line dark blue for both.
     """
     # Colors
     dark_blue = "#003366"
     green     = "#2ca02c"
     red       = "#d62728"
+
     if series.lower() == "pesonet":
         bar_color, line_color = green, dark_blue
+        v_vals, v_text = _ticks_volume_pesonet()
+        v_range = [0, 10e6]
     else:
         bar_color, line_color = red, dark_blue
+        v_vals, v_text = _ticks_volume_default()
+        v_range = [0, 800e6]
 
-    # Build figure with secondary y for Volume (right axis)
+    # Value ticks (common)
+    b_vals, b_text = _ticks_value_default()
+    b_range = [0, 1.4e12]
+
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    # VALUE as LINE on LEFT axis (secondary_y=False)
+    # Value (LINE) on LEFT
     fig.add_trace(
         go.Scatter(
             x=df["Period"],
@@ -211,7 +232,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         secondary_y=False,
     )
 
-    # VOLUME as BAR on RIGHT axis (secondary_y=True)
+    # Volume (BAR) on RIGHT
     fig.add_trace(
         go.Bar(
             x=df["Period"],
@@ -223,27 +244,17 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         secondary_y=True,
     )
 
-    # Axis configs
-    v_vals, v_text = _ticks_m("M")   # for Volume, 0→800M
-    b_vals, b_text = _ticks_b("B")   # for Value, 0→1.4t (i.e., 1,400B)
-
+    # Left (Value) axis
     fig.update_yaxes(
-        title_text="Value (₱)",
-        secondary_y=False,   # LEFT
-        rangemode="tozero",
-        range=[0, 1.4e12],
-        tickvals=b_vals,
-        ticktext=b_text,
-        ticks="outside",
+        title_text="Value (₱)", secondary_y=False,
+        range=b_range, tickvals=b_vals, ticktext=b_text,
+        ticks="outside", rangemode="tozero",
     )
+    # Right (Volume) axis
     fig.update_yaxes(
-        title_text="Volume (count)",
-        secondary_y=True,    # RIGHT
-        rangemode="tozero",
-        range=[0, 800e6],
-        tickvals=v_vals,
-        ticktext=v_text,
-        ticks="outside",
+        title_text="Volume (count)", secondary_y=True,
+        range=v_range, tickvals=v_vals, ticktext=v_text,
+        ticks="outside", rangemode="tozero",
     )
 
     fig.update_layout(
@@ -503,4 +514,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Axes: Volume → right (0 to 800M, step 200M); Value → left (0 to 1.4t, step 200B). Tables: Volume as 4,278,923; Value as ₱1,234,567.8. KPIs use M/B/t.")
+st.caption("PESONet Volume ticks: 0–10M every 2M (right). InstaPay Volume ticks: 0–800M every 200M (right). Value ticks: 0–1.4t every 200B (left).")

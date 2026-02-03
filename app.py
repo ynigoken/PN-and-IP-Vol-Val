@@ -253,7 +253,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     if any(t.type == "scatter" for t in fig.data):
         bars = [t for t in fig.data if t.type != "scatter"]
         lines = [t for t in fig.data if t.type == "scatter"]
-        fig.data = tuple(lines + bars)
+        fig.data = tuple(bars + lines)
 
     # Left (Value) axis
     fig.update_yaxes(

@@ -1,16 +1,17 @@
 # app.py
 # PESONet & InstaPay Dashboard
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
-# with: (a) month/year pickers, (b) selected-filter totals first,
-# (c) humanized KPIs (Million/Billion/Trillion, ₱ retained),
-# (d) tables with string-formatted display (Volume int commas; Value ₱ + commas + 1 decimal),
-# (e) chart: Volume as BAR, Value as LINE.
+# Updates:
+# - Humanized units: M, B, t (with ₱ for Value)
+# - PESONet: Volume (green bar, right axis 0→800M, ticks 200M); Value (dark blue line, left axis 0→1.4t, ticks 200B)
+# - InstaPay: Volume (red bar, right axis 0→800M, ticks 200M); Value (dark blue line, left axis 0→1.4t, ticks 200B)
+# - Tables: Volume as comma-int; Value as ₱ comma + 1 decimal; Period as Jan-YYYY
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Tuple, List
 
 import numpy as np
 import pandas as pd
@@ -23,7 +24,7 @@ import streamlit as st
 # =========================
 st.set_page_config(page_title="PESONet & InstaPay Dashboard", layout="wide")
 st.title("PESONet & InstaPay Dashboard")
-st.caption("v1.4.2 • table format fix • bar+line chart • month/year pickers")
+st.caption("v1.5 • colored bar+line, axis ranges & labels, M/B/t, formatted tables")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -39,7 +40,6 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
     """
     p = Path(file_path)
     if not p.exists():
-        # Streamlit Cloud pattern: relative to app file
         p = Path(__file__).parent / file_path
 
     xls = pd.ExcelFile(p, engine="openpyxl")
@@ -52,13 +52,7 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
         df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
 
         # Keep expected columns if present
-        keep = [
-            c for c in [
-                "Period", "Volume", "Value",
-                "%Change in Vol", "%Change in Val",
-                "Last12MTH", "Quarter"
-            ] if c in df.columns
-        ]
+        keep = [c for c in ["Period", "Volume", "Value", "%Change in Vol", "%Change in Val", "Last12MTH", "Quarter"] if c in df.columns]
         df = df[keep].copy()
 
         # Parse dates
@@ -84,7 +78,7 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
             df["Month"] = df["Period"].dt.month
             df["MonthName"] = df["Period"].dt.strftime("%b")
             df["YearMonth"] = df["Period"].dt.to_period("M").dt.to_timestamp()
-            df["YearQ"] = df["Period"].dt.to_period("Q").astype(str)  # e.g., '2024Q1'
+            df["YearQ"] = df["Period"].dt.to_period("Q").astype(str)  # '2024Q1'
             df["YearQ"] = df["YearQ"].str.replace("Q", "-Q", regex=False)  # '2024-Q1'
 
         out[sheet] = df.sort_values("Period")
@@ -94,11 +88,11 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
 
 def _humanize(x: float | int, is_money: bool = False) -> str:
     """
-    Formats a number with at least one decimal and suffix:
+    Formats a number with one decimal and suffix:
       - < 1,000,000: 12,345.7
-      - >= 1M: 1.1 Million
-      - >= 1B: 1.1 Billion
-      - >= 1T: 1.1 Trillion
+      - >= 1M: 1.1M
+      - >= 1B: 1.1B
+      - >= 1t: 1.1t (trillion; lowercase t as requested)
     Always keeps '₱' for money.
     """
     if x is None or pd.isna(x):
@@ -112,13 +106,13 @@ def _humanize(x: float | int, is_money: bool = False) -> str:
 
     if absx >= trillion:
         num = absx / trillion
-        text = f"{sign}{num:,.1f} Trillion"
+        text = f"{sign}{num:,.1f}t"
     elif absx >= billion:
         num = absx / billion
-        text = f"{sign}{num:,.1f} Billion"
+        text = f"{sign}{num:,.1f}B"
     elif absx >= million:
         num = absx / million
-        text = f"{sign}{num:,.1f} Million"
+        text = f"{sign}{num:,.1f}M"
     else:
         text = f"{sign}{absx:,.1f}"
 
@@ -139,10 +133,7 @@ def _agg_annual(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _ytm(df: pd.DataFrame, end_ts: pd.Timestamp) -> Tuple[float, float]:
-    """
-    YTM (Year-to-Month): Jan..end_month of end_ts within end_ts.year.
-    Returns (vol_sum, val_sum).
-    """
+    """YTM (Year-to-Month): Jan..end_month of end_ts within end_ts.year."""
     m_end = end_ts.month
     y_end = end_ts.year
     d = df[(df["Year"] == y_end) & (df["Month"] <= m_end)]
@@ -150,7 +141,6 @@ def _ytm(df: pd.DataFrame, end_ts: pd.Timestamp) -> Tuple[float, float]:
 
 
 def _ytd(df: pd.DataFrame, end_ts: pd.Timestamp) -> Tuple[float, float]:
-    # Same range as YTM at monthly granularity (kept separate for clarity)
     return _ytm(df, end_ts)
 
 
@@ -160,17 +150,136 @@ def _safe_pct(new: float, base: float) -> float | None:
     return (new - base) / base
 
 
-def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
-    """
-    Returns a filtered DataFrame based on sidebar controls.
-      Mode A: Range (min..max month) + optional months-of-year
-      Mode B: Pick months & years (explicit)
-    """
-    st.sidebar.header("Controls")
+def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame:
+    """Return a copy with formatted display columns for Period (optional), Volume, Value."""
+    t = df_in.copy()
+    if period_fmt and "Period" in t.columns:
+        t["Period"] = t["Period"].dt.strftime("%b-%Y")
+    t["Volume_display"] = t["Volume"].map(lambda x: "—" if pd.isna(x) else f"{x:,.0f}")
+    t["Value_display"]  = t["Value"].map(lambda x: "—" if pd.isna(x) else f"₱{x:,.1f}")
+    cols: List[str] = []
+    if "Period" in t.columns: cols.append("Period")
+    if "Quarter" in t.columns: cols.append("Quarter")
+    cols += ["Volume_display", "Value_display"]
+    return t[cols]
 
+
+# === Axis helpers ===
+def _ticks_m(unit: str = "M") -> Tuple[List[float], List[str]]:
+    """Return tick values & labels for 0→800M every 200M."""
+    vals = [0, 200e6, 400e6, 600e6, 800e6]
+    labs = ["0"] + [f"{int(v/1e6)}{unit}" for v in vals[1:]]
+    return vals, labs
+
+def _ticks_b(unit: str = "B") -> Tuple[List[float], List[str]]:
+    """Return tick values & labels for 0→1.4t (i.e., 1,400B) every 200B."""
+    vals = [0] + [i * 200e9 for i in range(1, 8)]  # 200B..1400B
+    labs = ["0"] + [f"{int(v/1e9)}{unit}" for v in vals[1:]]
+    return vals, labs
+
+
+def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure:
+    """
+    Volume = BAR on RIGHT axis (0→800M, ticks 200M as '200M' etc.)
+    Value  = LINE on LEFT axis (0→1.4t, ticks 200B as '200B' etc.)
+    Colors:
+      - PESONet: bar green, line dark blue
+      - InstaPay: bar red,   line dark blue
+    """
+    # Colors
+    dark_blue = "#003366"
+    green     = "#2ca02c"
+    red       = "#d62728"
+    if series.lower() == "pesonet":
+        bar_color, line_color = green, dark_blue
+    else:
+        bar_color, line_color = red, dark_blue
+
+    # Build figure with secondary y for Volume (right axis)
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+    # VALUE as LINE on LEFT axis (secondary_y=False)
+    fig.add_trace(
+        go.Scatter(
+            x=df["Period"],
+            y=df["Value"],
+            mode="lines+markers",
+            name="Value (₱)",
+            line=dict(color=line_color, width=2),
+            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+
+    # VOLUME as BAR on RIGHT axis (secondary_y=True)
+    fig.add_trace(
+        go.Bar(
+            x=df["Period"],
+            y=df["Volume"],
+            name="Volume",
+            marker_color=bar_color,
+            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+
+    # Axis configs
+    v_vals, v_text = _ticks_m("M")   # for Volume, 0→800M
+    b_vals, b_text = _ticks_b("B")   # for Value, 0→1.4t (i.e., 1,400B)
+
+    fig.update_yaxes(
+        title_text="Value (₱)",
+        secondary_y=False,   # LEFT
+        rangemode="tozero",
+        range=[0, 1.4e12],
+        tickvals=b_vals,
+        ticktext=b_text,
+        ticks="outside",
+    )
+    fig.update_yaxes(
+        title_text="Volume (count)",
+        secondary_y=True,    # RIGHT
+        rangemode="tozero",
+        range=[0, 800e6],
+        tickvals=v_vals,
+        ticktext=v_text,
+        ticks="outside",
+    )
+
+    fig.update_layout(
+        title=title,
+        hovermode="x unified",
+        barmode="overlay",
+        margin=dict(l=10, r=10, t=50, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    return fig
+
+
+# =========================
+# Load data
+# =========================
+data = _load_excel(DATA_FILE)
+if not data:
+    st.error("Could not load any data from the Excel file.")
+    st.stop()
+
+AVAILABLE_SERIES = list(data.keys())  # e.g., ["PESONet", "InstaPay"]
+
+
+# =========================
+# Sidebar - choose series first & filters
+# =========================
+series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0, key="series_choice")
+df0 = data[series].copy()
+if df0.empty:
+    st.warning("The selected series has no rows.")
+    st.stop()
+
+def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
+    st.sidebar.header("Controls")
     min_d = df_for_series["Period"].min()
     max_d = df_for_series["Period"].max()
-
     mode = st.sidebar.radio(
         "Filter mode",
         options=["Range", "Pick months & years"],
@@ -178,7 +287,6 @@ def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.Da
         key=f"{key_prefix}_mode",
         help="Choose a continuous date range or explicitly pick year(s) and month(s).",
     )
-
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     m2num = {m:i+1 for i,m in enumerate(months)}
 
@@ -199,105 +307,19 @@ def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.Da
             key=f"{key_prefix}_months_optional",
         )
         allowed_month_nums = {m2num[m] for m in allowed_months}
-
-        d = df_for_series[
-            (df_for_series["Period"] >= pd.to_datetime(start)) &
-            (df_for_series["Period"] <= pd.to_datetime(end))
-        ]
+        d = df_for_series[(df_for_series["Period"] >= pd.to_datetime(start)) & (df_for_series["Period"] <= pd.to_datetime(end))]
         d = d[d["Month"].isin(allowed_month_nums)]
         return d
-
     else:
         years = sorted(df_for_series["Year"].dropna().unique().tolist())
-        sel_years = st.sidebar.multiselect(
-            "Year(s)",
-            options=years,
-            default=years[-1:],  # latest year by default
-            key=f"{key_prefix}_years",
-        )
-        sel_months = st.sidebar.multiselect(
-            "Month(s)",
-            options=months,
-            default=months,  # all months by default
-            key=f"{key_prefix}_months",
-            help="Pick specific month(s) to include. Use with Year(s) above.",
-        )
+        sel_years = st.sidebar.multiselect("Year(s)", options=years, default=years[-1:], key=f"{key_prefix}_years")
+        sel_months = st.sidebar.multiselect("Month(s)", options=months, default=months, key=f"{key_prefix}_months")
         allowed_month_nums = {m2num[m] for m in sel_months}
-
         d = df_for_series[df_for_series["Year"].isin(sel_years)]
         d = d[d["Month"].isin(allowed_month_nums)]
         return d
 
-
-def _bar_line_chart(df: pd.DataFrame, title: str = "") -> go.Figure:
-    """
-    Volume as BAR (left y-axis), Value as LINE (right y-axis)
-    """
-    fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    # Volume as bar (primary axis)
-    fig.add_trace(
-        go.Bar(
-            x=df["Period"],
-            y=df["Volume"],
-            name="Volume",
-            marker_color="#1f77b4",
-            hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
-        ),
-        secondary_y=False,
-    )
-
-    # Value as line (secondary axis)
-    fig.add_trace(
-        go.Scatter(
-            x=df["Period"],
-            y=df["Value"],
-            mode="lines+markers",
-            name="Value (₱)",
-            line=dict(color="#ff7f0e", width=2),
-            hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
-        ),
-        secondary_y=True,
-    )
-
-    fig.update_layout(
-        title=title,
-        hovermode="x unified",
-        barmode="overlay",
-        margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
-    # Axis tick formats: integers for Volume, 1-decimal for Value
-    fig.update_yaxes(title_text="Volume (count)", secondary_y=False, rangemode="tozero", tickformat=",.0f")
-    fig.update_yaxes(title_text="Value (₱)", secondary_y=True, rangemode="tozero", tickformat=",.1f")
-    return fig
-
-
-# =========================
-# Load data
-# =========================
-data = _load_excel(DATA_FILE)
-
-if not data:
-    st.error("Could not load any data from the Excel file.")
-    st.stop()
-
-AVAILABLE_SERIES = list(data.keys())  # e.g., ["PESONet", "InstaPay"]
-
-
-# =========================
-# Sidebar - choose series first
-# =========================
-series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0, key="series_choice")
-df0 = data[series].copy()
-
-if df0.empty:
-    st.warning("The selected series has no rows.")
-    st.stop()
-
-# Apply filter controls
 df = _filter_controls(df0, key_prefix=series)
-
 if df.empty:
     st.info("No data for the chosen filters.")
     st.stop()
@@ -310,13 +332,9 @@ st.divider()
 # =========================
 sel_vol = df["Volume"].sum()
 sel_val = df["Value"].sum()
-
 k0a, k0b = st.columns(2)
-k0a.metric(f"{series} • Volume (Selected Filter)", _humanize(sel_vol),
-           help="Sum of Volume for the exact months/years you selected.")
-k0b.metric(f"{series} • Value (Selected Filter)", _humanize(sel_val, is_money=True),
-           help="Sum of Value (₱) for the exact months/years you selected.")
-
+k0a.metric(f"{series} • Volume (Selected Filter)", _humanize(sel_vol), help="Sum of Volume for the exact months/years you selected.")
+k0b.metric(f"{series} • Value (Selected Filter)", _humanize(sel_val, is_money=True), help="Sum of Value (₱) for the exact months/years you selected.")
 st.divider()
 
 
@@ -324,17 +342,12 @@ st.divider()
 # Additional KPIs (context)
 # =========================
 latest_period = df["Period"].max()
-
-# YTM & YTD use the full series reference
 ytm_vol, ytm_val = _ytm(df0, latest_period)
 prev_ref = latest_period.replace(year=latest_period.year - 1)
 ytm_prev_vol, ytm_prev_val = _ytm(df0, prev_ref)
-
 ytm_vol_yoy = _safe_pct(ytm_vol, ytm_prev_vol)
 ytm_val_yoy = _safe_pct(ytm_val, ytm_prev_val)
-
 ytd_vol, ytd_val = _ytd(df0, latest_period)
-
 q_agg = _agg_quarterly(df0)
 a_agg = _agg_annual(df0)
 
@@ -390,43 +403,23 @@ st.divider()
 
 
 # =========================
-# Chart (Volume = BAR, Value = LINE)
+# Chart (series-colored; Volume = BAR on right, Value = LINE on left)
 # =========================
 st.subheader(f"Monthly Trend — {series}")
-fig = _bar_line_chart(df, title=f"{series} Volume (bar) & Value (line)")
+fig = _bar_line_chart(df, series, title=f"{series} • Volume (bar, right) & Value (line, left)")
 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
 
 # =========================
 # Aggregations (Tables)
 # =========================
-tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(
-    ["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"]
-)
-
-def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame:
-    """Return a copy with formatted display columns for Period, Volume, Value."""
-    t = df_in.copy()
-    if period_fmt:
-        t["Period"] = t["Period"].dt.strftime("%b-%Y")
-    # Create display strings
-    t["Volume_display"] = t["Volume"].map(lambda x: "—" if pd.isna(x) else f"{x:,.0f}")
-    t["Value_display"]  = t["Value"].map(lambda x: "—" if pd.isna(x) else f"₱{x:,.1f}")
-    # Reorder for display
-    cols = []
-    if "Period" in t.columns:
-        cols.append("Period")
-    if "Quarter" in t.columns:
-        cols.append("Quarter")
-    cols += ["Volume_display", "Value_display"]
-    return t[cols]
+tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"])
 
 # ---- Monthly (filtered)
 with tab_monthly:
     show_cols = ["Period", "Volume", "Value"]
     t_raw = df[show_cols].copy()             # raw for CSV
     t_disp = _format_table(df[show_cols], period_fmt=True)
-
     st.dataframe(
         t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
@@ -438,17 +431,11 @@ with tab_monthly:
         },
         height=420,
     )
-
     # CSV export (Period formatted, numbers raw for analysis)
     t_csv = t_raw.copy()
     t_csv["Period"] = t_csv["Period"].dt.strftime("%b-%Y")
     csv = t_csv.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "Download monthly (CSV)",
-        data=csv,
-        file_name=f"{series}_monthly_filtered.csv",
-        mime="text/csv"
-    )
+    st.download_button("Download monthly (CSV)", data=csv, file_name=f"{series}_monthly_filtered.csv", mime="text/csv")
 
 # ---- Quarterly (full series context)
 with tab_quarterly:
@@ -495,7 +482,6 @@ with tab_ytm_ytd:
             "Previous (YoY base)": [ytm_prev_vol, ytm_prev_val, None, ytm_prev_vol, ytm_prev_val],
         }
     )
-    # Humanized display columns
     ytm_table["Current (fmt)"] = [
         _humanize(ytm_vol),
         _humanize(ytm_val, is_money=True),
@@ -517,4 +503,4 @@ with tab_ytm_ytd:
         height=320,
     )
 
-st.caption("Tip: Tables now render numbers as strings (Volume = 4,278,923; Value = ₱1,234,567.8) to avoid NumberColumn formatting issues. CSVs keep raw numbers for analysis.")
+st.caption("Axes: Volume → right (0 to 800M, step 200M); Value → left (0 to 1.4t, step 200B). Tables: Volume as 4,278,923; Value as ₱1,234,567.8. KPIs use M/B/t.")

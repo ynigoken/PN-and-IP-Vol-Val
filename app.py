@@ -4,6 +4,8 @@
 # - Title: "PESONet and InstaPay Volume and Value"
 # - Tables show latest rows first (Monthly, Quarterly, Annual)
 # - Typo fix in KPI fallback assignment
+# - Filter mode: both modes require a Begin and End Period
+# - Annual table: includes 'Year' column and latest-first display
 
 from __future__ import annotations
 
@@ -159,6 +161,7 @@ def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame
     cols: List[str] = []
     if "Period" in t.columns: cols.append("Period")
     if "Quarter" in t.columns: cols.append("Quarter")
+    if "Year" in t.columns: cols.append("Year")  # Ensure Year can be displayed (Annual table)
     cols += ["Volume_display", "Value_display"]
     return t[cols]
 
@@ -307,13 +310,20 @@ def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.Da
         options=["Range", "Pick months & years"],
         index=0,
         key=f"{key_prefix}_mode",
-        help="Choose a continuous date range or explicitly pick year(s) and month(s).",
+        help="Choose a continuous date range or explicitly pick year(s) and month(s). Both modes require Begin & End Period.",
     )
+
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     m2num = {m:i+1 for i,m in enumerate(months)}
 
+    # Build list of all available month periods for select boxes (normalized to first of month)
+    all_periods = pd.date_range(min_d.to_period("M").to_timestamp(), max_d.to_period("M").to_timestamp(), freq="MS")
+    def _fmt_mmy(ts: pd.Timestamp) -> str:
+        return ts.strftime("%b-%Y")
+
     if mode == "Range":
-        st.sidebar.caption("**Select month range**")
+        # ---- Range mode: slider enforces Begin/End Period (required)
+        st.sidebar.caption("**Select Begin & End Period (required)**")
         start, end = st.sidebar.slider(
             "Period",
             min_value=min_d.to_pydatetime(),
@@ -322,6 +332,14 @@ def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.Da
             format="YYYY-MM",
             key=f"{key_prefix}_range",
         )
+        if start is None or end is None:
+            st.sidebar.error("Please select both Begin and End Period.")
+            return df_for_series.iloc[0:0]
+        if start > end:
+            st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
+            return df_for_series.iloc[0:0]
+
+        # Optional month filter within the chosen range
         allowed_months = st.sidebar.multiselect(
             "Months (optional)",
             options=months,
@@ -329,15 +347,48 @@ def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.Da
             key=f"{key_prefix}_months_optional",
         )
         allowed_month_nums = {m2num[m] for m in allowed_months}
+
         d = df_for_series[(df_for_series["Period"] >= pd.to_datetime(start)) & (df_for_series["Period"] <= pd.to_datetime(end))]
         d = d[d["Month"].isin(allowed_month_nums)]
         return d
+
     else:
+        # ---- Pick months & years: require Begin/End Period, then apply Year/Month filters inside that window
+        st.sidebar.caption("**Select Begin & End Period (required)**")
+        beg_default = all_periods.min()
+        end_default = all_periods.max()
+
+        beg_period = st.sidebar.selectbox(
+            "Begin Period",
+            options=all_periods,
+            format_func=_fmt_mmy,
+            index=0,
+            key=f"{key_prefix}_beg_period",
+        )
+        end_period = st.sidebar.selectbox(
+            "End Period",
+            options=all_periods,
+            format_func=_fmt_mmy,
+            index=len(all_periods)-1,
+            key=f"{key_prefix}_end_period",
+        )
+
+        if beg_period is None or end_period is None:
+            st.sidebar.error("Please select both Begin and End Period.")
+            return df_for_series.iloc[0:0]
+        if beg_period > end_period:
+            st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
+            return df_for_series.iloc[0:0]
+
+        # Now pick Years & Months (applied within the selected Begin..End window)
         years = sorted(df_for_series["Year"].dropna().unique().tolist())
-        sel_years = st.sidebar.multiselect("Year(s)", options=years, default=years[-1:], key=f"{key_prefix}_years")
+        sel_years = st.sidebar.multiselect("Year(s)", options=years, default=[years[-1]] if years else [], key=f"{key_prefix}_years")
         sel_months = st.sidebar.multiselect("Month(s)", options=months, default=months, key=f"{key_prefix}_months")
         allowed_month_nums = {m2num[m] for m in sel_months}
-        d = df_for_series[df_for_series["Year"].isin(sel_years)]
+
+        d = df_for_series[(df_for_series["Period"] >= beg_period) & (df_for_series["Period"] <= end_period)]
+        if sel_years:
+            d = d[d["Year"].isin(sel_years)]
         d = d[d["Month"].isin(allowed_month_nums)]
         return d
 
@@ -490,26 +541,30 @@ with tab_quarterly:
     csv = tq_disp.iloc[::-1].to_csv(index=False).encode("utf-8")
     st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
 
-# ---- Annual (full series context): show latest first
+# ---- Annual (full series context): include Year column and show latest first
 with tab_annual:
     ta = _agg_annual(df0)
 
     # Latest year first for display
-    t_disp = _format_table(ta.iloc[::-1], period_fmt=False)
+    ta_latest_first = ta.iloc[::-1].copy()
+
+    # Keep Year visible in table by relying on updated _format_table
+    t_disp = _format_table(ta_latest_first, period_fmt=False)
 
     st.dataframe(
         t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
         hide_index=True,
         column_config={
+            "Year": st.column_config.NumberColumn(format="%d"),
             "Volume": st.column_config.TextColumn(help="Integers with comma separators"),
             "Value": st.column_config.TextColumn(help="₱, commas, one decimal"),
         },
         height=420,
     )
 
-    # CSV latest first
-    csv = ta.iloc[::-1].to_csv(index=False).encode("utf-8")
+    # CSV latest first (include Year)
+    csv = ta_latest_first.to_csv(index=False).encode("utf-8")
     st.download_button("Download annual (CSV)", data=csv, file_name=f"{series}_annual.csv", mime="text/csv")
 
 # ---- YTM & YTD summary table (kept humanized for readability)
@@ -541,3 +596,4 @@ with tab_ytm_ytd:
         hide_index=True,
         height=320,
     )
+

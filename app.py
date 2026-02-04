@@ -2,6 +2,8 @@
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
 # - Title: "PESONet and InstaPay Volume and Value"
+# - Tables show latest rows first (Monthly, Quarterly, Annual)
+# - Typo fix in KPI fallback assignment
 
 from __future__ import annotations
 
@@ -77,6 +79,7 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
             df["YearQ"] = df["Period"].dt.to_period("Q").astype(str)  # '2024Q1'
             df["YearQ"] = df["YearQ"].str.replace("Q", "-Q", regex=False)  # '2024-Q1'
 
+        # Keep ascending in memory for charts and time-based calcs
         out[sheet] = df.sort_values("Period")
 
     return out
@@ -214,9 +217,8 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     b_vals, b_text = _ticks_value_default()
     b_range = [0, 1.4e12]
 
-    fig = make_subplots(specs=[[{"secondary_y": True}]]) 
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
 
-    
     # 1) VOLUME (BAR) on RIGHT  --- add FIRST (behind)
     bar_trace = go.Bar(
         x=df["Period"],
@@ -227,9 +229,9 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         marker_line_width=0.0,
         hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
     )
-    fig.add_trace(bar_trace,secondary_y=True) #secondary_y=True
+    fig.add_trace(bar_trace, secondary_y=True)
 
-     # 2) VALUE (LINE) on LEFT   --- add SECOND (on top)
+    # 2) VALUE (LINE) on LEFT   --- add SECOND (on top)
     line_trace = go.Scatter(
         x=df["Period"],
         y=df["Value"],
@@ -238,17 +240,16 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         line=dict(color=line_color, width=3),
         marker=dict(size=5, color=line_color),
         hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
-        # cliponaxis=False,
     )
-    fig.add_trace(line_trace, secondary_y=False) #secondary_y=False
+    fig.add_trace(line_trace, secondary_y=False)
 
     fig.update_traces(selector=dict(type="bar"), opacity=0.55)
     fig.data = tuple(
         [t for t in fig.data if t.type == "bar"] +
         [t for t in fig.data if t.type == "scatter"]
     )
-    
-    # --- Hard guarantee the line is on top: move all scatter traces to the end of the trace list
+
+    # --- Hard guarantee the line is on top
     if any(t.type == "scatter" for t in fig.data):
         bars = [t for t in fig.data if t.type != "scatter"]
         lines = [t for t in fig.data if t.type == "scatter"]
@@ -394,7 +395,8 @@ if not a_agg.empty:
     else:
         a_vol_yoy = a_val_yoy = None
 else:
-    a_vol = a_val = a_val_yoy = a_val_yoy = None
+    # Typo fix: include a_vol_yoy here as well
+    a_vol = a_val = a_vol_yoy = a_val_yoy = None
 
 k1, k2, k3, k4 = st.columns(4)
 k1.metric(f"YTM {latest_period.strftime('%Y-%m')} Volume", _humanize(ytm_vol),
@@ -436,11 +438,16 @@ st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 # =========================
 tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(["Monthly (filtered)", "Quarterly", "Annual", "YTM & YTD"])
 
-# ---- Monthly (filtered)
+# ---- Monthly (filtered): show latest first
 with tab_monthly:
     show_cols = ["Period", "Volume", "Value"]
-    t_raw = df[show_cols].copy()             # raw for CSV
-    t_disp = _format_table(df[show_cols], period_fmt=True)
+
+    # Sort latest first for display
+    t_disp = _format_table(
+        df[show_cols].sort_values("Period", ascending=False),
+        period_fmt=True
+    )
+
     st.dataframe(
         t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
@@ -452,17 +459,21 @@ with tab_monthly:
         },
         height=420,
     )
-    # CSV export (Period formatted, numbers raw for analysis)
-    t_csv = t_raw.copy()
+
+    # CSV export (latest first)
+    t_csv = df[show_cols].sort_values("Period", ascending=False).copy()
     t_csv["Period"] = t_csv["Period"].dt.strftime("%b-%Y")
     csv = t_csv.to_csv(index=False).encode("utf-8")
     st.download_button("Download monthly (CSV)", data=csv, file_name=f"{series}_monthly_filtered.csv", mime="text/csv")
 
-# ---- Quarterly (full series context)
+# ---- Quarterly (full series context): show latest first
 with tab_quarterly:
     tq = _agg_quarterly(df0)
     tq_disp = tq[["YearQ", "Volume", "Value"]].rename(columns={"YearQ": "Quarter"})
-    t_disp = _format_table(tq_disp, period_fmt=False)
+
+    # Latest quarter first for display
+    t_disp = _format_table(tq_disp.iloc[::-1], period_fmt=False)
+
     st.dataframe(
         t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
@@ -474,13 +485,18 @@ with tab_quarterly:
         },
         height=420,
     )
-    csv = tq_disp.to_csv(index=False).encode("utf-8")
+
+    # CSV latest first
+    csv = tq_disp.iloc[::-1].to_csv(index=False).encode("utf-8")
     st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
 
-# ---- Annual (full series context)
+# ---- Annual (full series context): show latest first
 with tab_annual:
     ta = _agg_annual(df0)
-    t_disp = _format_table(ta, period_fmt=False)
+
+    # Latest year first for display
+    t_disp = _format_table(ta.iloc[::-1], period_fmt=False)
+
     st.dataframe(
         t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
@@ -491,7 +507,9 @@ with tab_annual:
         },
         height=420,
     )
-    csv = ta.to_csv(index=False).encode("utf-8")
+
+    # CSV latest first
+    csv = ta.iloc[::-1].to_csv(index=False).encode("utf-8")
     st.download_button("Download annual (CSV)", data=csv, file_name=f"{series}_annual.csv", mime="text/csv")
 
 # ---- YTM & YTD summary table (kept humanized for readability)

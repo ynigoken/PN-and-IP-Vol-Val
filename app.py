@@ -1,11 +1,10 @@
 # app.py
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates:
-# - Title: "PESONet and InstaPay Volume and Value"
 # - Tables show latest rows first (Monthly, Quarterly, Annual)
 # - Typo fix in KPI fallback assignment
-# - Filter mode: both modes require a Begin and End Period
-# - Annual table: includes 'Year' column and latest-first display
+# - FILTERS: removed years/months multi-selects; both modes now require Begin/End Period via Month+Year dropdowns
+# - Annual table: includes 'Year' column, left-aligned, and latest-first display
 
 from __future__ import annotations
 
@@ -88,23 +87,13 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
 
 
 def _humanize(x: float | int, is_money: bool = False) -> str:
-    """
-    Formats a number with one decimal and suffix:
-      - < 1,000,000: 12,345.7
-      - >= 1M: 1.1M
-      - >= 1B: 1.1B
-      - >= 1T: 1.1T (uppercase T for trillion)
-    Always keeps '₱' for money.
-    """
     if x is None or pd.isna(x):
         return "—"
-
     absx = abs(x)
     sign = "-" if x < 0 else ""
     trillion = 1_000_000_000_000
     billion  = 1_000_000_000
     million  = 1_000_000
-
     if absx >= trillion:
         num = absx / trillion
         text = f"{sign}{num:,.1f}T"
@@ -116,7 +105,6 @@ def _humanize(x: float | int, is_money: bool = False) -> str:
         text = f"{sign}{num:,.1f}M"
     else:
         text = f"{sign}{absx:,.1f}"
-
     return f"₱{text}" if is_money else text
 
 
@@ -152,27 +140,27 @@ def _safe_pct(new: float, base: float) -> float | None:
 
 
 def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame:
-    """Return a copy with formatted display columns for Period (optional), Volume, Value."""
+    """
+    Return a copy with formatted display columns for Period (optional), Volume, Value, and keep Year/Quarter if present.
+    """
     t = df_in.copy()
     if period_fmt and "Period" in t.columns:
         t["Period"] = t["Period"].dt.strftime("%b-%Y")
+    # Convert Year to string for left alignment in Streamlit (TextColumn aligns left)
+    if "Year" in t.columns:
+        t["Year"] = t["Year"].astype("Int64").astype(str)
     t["Volume_display"] = t["Volume"].map(lambda x: "—" if pd.isna(x) else f"{x:,.0f}")
     t["Value_display"]  = t["Value"].map(lambda x: "—" if pd.isna(x) else f"₱{x:,.1f}")
     cols: List[str] = []
     if "Period" in t.columns: cols.append("Period")
     if "Quarter" in t.columns: cols.append("Quarter")
-    if "Year" in t.columns: cols.append("Year")  # Ensure Year can be displayed (Annual table)
+    if "Year" in t.columns: cols.append("Year")
     cols += ["Volume_display", "Value_display"]
     return t[cols]
 
 
 # === Axis helpers ===
 def _ticks_custom(start: float, stop: float, step: float, unit_label: str) -> tuple[list[float], list[str]]:
-    """
-    Generic helper to produce tick values and 'pretty' labels.
-    For unit_label == "M": labels are v/1e6 + "M"
-    For unit_label == "B": labels are v/1e9 + "B"
-    """
     vals = list(np.arange(start, stop + 0.5 * step, step))
     if unit_label == "M":
         labels = ["0"] + [f"{int(v/1e6)}M" for v in vals[1:]]
@@ -181,32 +169,19 @@ def _ticks_custom(start: float, stop: float, step: float, unit_label: str) -> tu
     return vals, labels
 
 def _ticks_volume_pesonet() -> tuple[list[float], list[str]]:
-    # PESONet Volume: 0..10M, step 2M
     return _ticks_custom(0, 10e6, 2e6, "M")
 
 def _ticks_volume_default() -> tuple[list[float], list[str]]:
-    # Default Volume (InstaPay): 0..800M, step 200M
     return _ticks_custom(0, 800e6, 200e6, "M")
 
 def _ticks_value_default() -> tuple[list[float], list[str]]:
-    # Value for all: 0..1.4T, step 200B (labels in B)
     return _ticks_custom(0, 1.4e12, 200e9, "B")
 
 
 def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure:
-    """
-    Volume = BAR on RIGHT axis; Value = LINE on LEFT axis.
-    PESONet: Volume ticks 0..10M step 2M (labels 2M, 4M, ...).
-    InstaPay: Volume ticks 0..800M step 200M.
-    Value (all): 0..1.4T step 200B (labels 200B, 400B, ...).
-    Colors: PESONet -> bar green, InstaPay -> bar red; line dark blue for both.
-    NOTE: Add BAR first (behind), then LINE (on top), then explicitly re-order traces to ensure the line sits on top.
-    """
-    # Colors
     dark_blue = "#003366"
     green     = "#2ca02c"
     red       = "#d62728"
-
     if series.lower() == "pesonet":
         bar_color, line_color = green, dark_blue
         v_vals, v_text = _ticks_volume_pesonet()
@@ -215,69 +190,33 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
         bar_color, line_color = red, dark_blue
         v_vals, v_text = _ticks_volume_default()
         v_range = [0, 800e6]
-
-    # Value ticks (common)
     b_vals, b_text = _ticks_value_default()
     b_range = [0, 1.4e12]
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-    # 1) VOLUME (BAR) on RIGHT  --- add FIRST (behind)
-    bar_trace = go.Bar(
-        x=df["Period"],
-        y=df["Volume"],
-        name="Volume",
-        marker_color=bar_color,
-        marker_line_color=bar_color,  # solid color
-        marker_line_width=0.0,
+    fig.add_trace(go.Bar(
+        x=df["Period"], y=df["Volume"], name="Volume",
+        marker_color=bar_color, marker_line_color=bar_color, marker_line_width=0.0,
         hovertemplate="%{x|%Y-%m} • Volume: %{y:,}<extra></extra>",
-    )
-    fig.add_trace(bar_trace, secondary_y=True)
-
-    # 2) VALUE (LINE) on LEFT   --- add SECOND (on top)
-    line_trace = go.Scatter(
-        x=df["Period"],
-        y=df["Value"],
-        mode="lines+markers",
-        name="Value (₱)",
-        line=dict(color=line_color, width=3),
-        marker=dict(size=5, color=line_color),
+    ), secondary_y=True)
+    fig.add_trace(go.Scatter(
+        x=df["Period"], y=df["Value"], mode="lines+markers", name="Value (₱)",
+        line=dict(color=line_color, width=3), marker=dict(size=5, color=line_color),
         hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
-    )
-    fig.add_trace(line_trace, secondary_y=False)
+    ), secondary_y=False)
 
     fig.update_traces(selector=dict(type="bar"), opacity=0.55)
-    fig.data = tuple(
-        [t for t in fig.data if t.type == "bar"] +
-        [t for t in fig.data if t.type == "scatter"]
-    )
-
-    # --- Hard guarantee the line is on top
+    # ensure line on top
     if any(t.type == "scatter" for t in fig.data):
         bars = [t for t in fig.data if t.type != "scatter"]
         lines = [t for t in fig.data if t.type == "scatter"]
         fig.data = tuple(bars + lines)
 
-    # Left (Value) axis
-    fig.update_yaxes(
-        title_text="Value (₱)", secondary_y=False,
-        range=b_range, tickvals=b_vals, ticktext=b_text,
-        ticks="outside", rangemode="tozero",
-    )
-    # Right (Volume) axis
-    fig.update_yaxes(
-        title_text="Volume (count)", secondary_y=True,
-        range=v_range, tickvals=v_vals, ticktext=v_text,
-        ticks="outside", rangemode="tozero",
-    )
-
-    fig.update_layout(
-        title=title,
-        hovermode="x unified",
-        barmode="overlay",
-        margin=dict(l=10, r=10, t=50, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    )
+    fig.update_yaxes(title_text="Value (₱)", secondary_y=False, range=b_range, tickvals=b_vals, ticktext=b_text, ticks="outside", rangemode="tozero")
+    fig.update_yaxes(title_text="Volume (count)", secondary_y=True, range=v_range, tickvals=v_vals, ticktext=v_text, ticks="outside", rangemode="tozero")
+    fig.update_layout(title=title, hovermode="x unified", barmode="overlay",
+                      margin=dict(l=10, r=10, t=50, b=10),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     return fig
 
 
@@ -301,100 +240,77 @@ if df0.empty:
     st.warning("The selected series has no rows.")
     st.stop()
 
-def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
-    st.sidebar.header("Controls")
+
+def _month_year_period_controls(df_for_series: pd.DataFrame, key_prefix: str, label_prefix: str) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """
+    Render two blocks in the sidebar, each with Month and Year selectboxes (Begin/End).
+    Returns (begin_period_timestamp, end_period_timestamp) at month start.
+    """
     min_d = df_for_series["Period"].min()
     max_d = df_for_series["Period"].max()
+
+    # Build choices
+    months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    month_to_num = {m: i+1 for i, m in enumerate(months)}
+    years = list(range(int(min_d.year), int(max_d.year) + 1))
+
+    st.sidebar.caption(f"**Select {label_prefix} Begin & End Period (required)**")
+    col_beg, col_end = st.sidebar.columns(2)
+
+    # Defaults: earliest month/year to latest month/year in data
+    beg_m_default = months[min_d.month - 1]
+    beg_y_default = min_d.year
+    end_m_default = months[max_d.month - 1]
+    end_y_default = max_d.year
+
+    with col_beg:
+        beg_month = st.selectbox("Begin Month", options=months, index=months.index(beg_m_default), key=f"{key_prefix}_beg_month")
+        beg_year  = st.selectbox("Begin Year",  options=years,  index=years.index(beg_y_default), key=f"{key_prefix}_beg_year")
+    with col_end:
+        end_month = st.selectbox("End Month", options=months, index=months.index(end_m_default), key=f"{key_prefix}_end_month")
+        end_year  = st.selectbox("End Year",  options=years,  index=years.index(end_y_default), key=f"{key_prefix}_end_year")
+
+    # Construct timestamps at month start
+    beg_period = pd.Timestamp(year=int(beg_year), month=int(month_to_num[beg_month]), day=1)
+    end_period = pd.Timestamp(year=int(end_year), month=int(month_to_num[end_month]), day=1)
+
+    # Clamp to available data bounds
+    beg_period = max(beg_period, min_d.to_period("M").to_timestamp())
+    end_period = min(end_period, max_d.to_period("M").to_timestamp())
+
+    if beg_period > end_period:
+        st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
+    return beg_period, end_period
+
+
+def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
+    st.sidebar.header("Controls")
     mode = st.sidebar.radio(
         "Filter mode",
         options=["Range", "Pick months & years"],
         index=0,
         key=f"{key_prefix}_mode",
-        help="Choose a continuous date range or explicitly pick year(s) and month(s). Both modes require Begin & End Period.",
+        help="Choose how you prefer to pick Begin and End Period.",
     )
 
-    months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-    m2num = {m:i+1 for i,m in enumerate(months)}
-
-    # Build list of all available month periods for select boxes (normalized to first of month)
-    all_periods = pd.date_range(min_d.to_period("M").to_timestamp(), max_d.to_period("M").to_timestamp(), freq="MS")
-    def _fmt_mmy(ts: pd.Timestamp) -> str:
-        return ts.strftime("%b-%Y")
-
+    # Regardless of mode, we now require Begin/End via Month+Year dropdowns
     if mode == "Range":
-        # ---- Range mode: slider enforces Begin/End Period (required)
-        st.sidebar.caption("**Select Begin & End Period (required)**")
-        start, end = st.sidebar.slider(
-            "Period",
-            min_value=min_d.to_pydatetime(),
-            max_value=max_d.to_pydatetime(),
-            value=(min_d.to_pydatetime(), max_d.to_pydatetime()),
-            format="YYYY-MM",
-            key=f"{key_prefix}_range",
-        )
-        if start is None or end is None:
-            st.sidebar.error("Please select both Begin and End Period.")
-            return df_for_series.iloc[0:0]
-        if start > end:
-            st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
-            return df_for_series.iloc[0:0]
-
-        # Optional month filter within the chosen range
-        allowed_months = st.sidebar.multiselect(
-            "Months (optional)",
-            options=months,
-            default=months,
-            key=f"{key_prefix}_months_optional",
-        )
-        allowed_month_nums = {m2num[m] for m in allowed_months}
-
-        d = df_for_series[(df_for_series["Period"] >= pd.to_datetime(start)) & (df_for_series["Period"] <= pd.to_datetime(end))]
-        d = d[d["Month"].isin(allowed_month_nums)]
-        return d
-
+        beg_period, end_period = _month_year_period_controls(df_for_series, f"{key_prefix}_range", "Range")
     else:
-        # ---- Pick months & years: require Begin/End Period, then apply Year/Month filters inside that window
-        st.sidebar.caption("**Select Begin & End Period (required)**")
-        beg_default = all_periods.min()
-        end_default = all_periods.max()
+        beg_period, end_period = _month_year_period_controls(df_for_series, f"{key_prefix}_pick", "Pick")
 
-        beg_period = st.sidebar.selectbox(
-            "Begin Period",
-            options=all_periods,
-            format_func=_fmt_mmy,
-            index=0,
-            key=f"{key_prefix}_beg_period",
-        )
-        end_period = st.sidebar.selectbox(
-            "End Period",
-            options=all_periods,
-            format_func=_fmt_mmy,
-            index=len(all_periods)-1,
-            key=f"{key_prefix}_end_period",
-        )
+    # Validate and apply filter (inclusive)
+    if beg_period is None or end_period is None or beg_period > end_period:
+        # Return empty DF so that we show a friendly message above
+        return df_for_series.iloc[0:0]
 
-        if beg_period is None or end_period is None:
-            st.sidebar.error("Please select both Begin and End Period.")
-            return df_for_series.iloc[0:0]
-        if beg_period > end_period:
-            st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
-            return df_for_series.iloc[0:0]
+    d = df_for_series[(df_for_series["Period"] >= beg_period) & (df_for_series["Period"] <= end_period)]
+    return d
 
-        # Now pick Years & Months (applied within the selected Begin..End window)
-        years = sorted(df_for_series["Year"].dropna().unique().tolist())
-        sel_years = st.sidebar.multiselect("Year(s)", options=years, default=[years[-1]] if years else [], key=f"{key_prefix}_years")
-        sel_months = st.sidebar.multiselect("Month(s)", options=months, default=months, key=f"{key_prefix}_months")
-        allowed_month_nums = {m2num[m] for m in sel_months}
-
-        d = df_for_series[(df_for_series["Period"] >= beg_period) & (df_for_series["Period"] <= end_period)]
-        if sel_years:
-            d = d[d["Year"].isin(sel_years)]
-        d = d[d["Month"].isin(allowed_month_nums)]
-        return d
 
 df = _filter_controls(df0, key_prefix=series)
 if df.empty:
-    st.info("No data for the chosen filters.")
+    st.info("No data for the chosen filters or invalid period range.")
     st.stop()
 
 st.divider()
@@ -446,7 +362,6 @@ if not a_agg.empty:
     else:
         a_vol_yoy = a_val_yoy = None
 else:
-    # Typo fix: include a_vol_yoy here as well
     a_vol = a_val = a_vol_yoy = a_val_yoy = None
 
 k1, k2, k3, k4 = st.columns(4)
@@ -493,7 +408,6 @@ tab_monthly, tab_quarterly, tab_annual, tab_ytm_ytd = st.tabs(["Monthly (filtere
 with tab_monthly:
     show_cols = ["Period", "Volume", "Value"]
 
-    # Sort latest first for display
     t_disp = _format_table(
         df[show_cols].sort_values("Period", ascending=False),
         period_fmt=True
@@ -522,7 +436,6 @@ with tab_quarterly:
     tq = _agg_quarterly(df0)
     tq_disp = tq[["YearQ", "Volume", "Value"]].rename(columns={"YearQ": "Quarter"})
 
-    # Latest quarter first for display
     t_disp = _format_table(tq_disp.iloc[::-1], period_fmt=False)
 
     st.dataframe(
@@ -537,33 +450,34 @@ with tab_quarterly:
         height=420,
     )
 
-    # CSV latest first
     csv = tq_disp.iloc[::-1].to_csv(index=False).encode("utf-8")
     st.download_button("Download quarterly (CSV)", data=csv, file_name=f"{series}_quarterly.csv", mime="text/csv")
 
-# ---- Annual (full series context): include Year column and show latest first
+# ---- Annual (full series context): include Year column, left-aligned, latest first
 with tab_annual:
     ta = _agg_annual(df0)
-
-    # Latest year first for display
     ta_latest_first = ta.iloc[::-1].copy()
 
-    # Keep Year visible in table by relying on updated _format_table
-    t_disp = _format_table(ta_latest_first, period_fmt=False)
+    # Ensure Year shows as left-aligned by using string for display
+    ta_latest_first_display = ta_latest_first.copy()
+    ta_latest_first_display["Year"] = ta_latest_first_display["Year"].astype("Int64").astype(str)
+
+    t_disp = _format_table(ta_latest_first_display, period_fmt=False)
 
     st.dataframe(
         t_disp.rename(columns={"Volume_display": "Volume", "Value_display": "Value"}),
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Year": st.column_config.NumberColumn(format="%d"),
+            # TextColumn aligns left
+            "Year": st.column_config.TextColumn(),
             "Volume": st.column_config.TextColumn(help="Integers with comma separators"),
             "Value": st.column_config.TextColumn(help="₱, commas, one decimal"),
         },
         height=420,
     )
 
-    # CSV latest first (include Year)
+    # CSV latest first (keep Year numeric in CSV for analysis)
     csv = ta_latest_first.to_csv(index=False).encode("utf-8")
     st.download_button("Download annual (CSV)", data=csv, file_name=f"{series}_annual.csv", mime="text/csv")
 
@@ -596,4 +510,3 @@ with tab_ytm_ytd:
         hide_index=True,
         height=320,
     )
-

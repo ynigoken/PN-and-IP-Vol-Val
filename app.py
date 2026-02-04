@@ -377,13 +377,19 @@ st.divider()
 
 
 # =========================
-# KPIs — FIRST: Selected filter totals
+# KPIs — FIRST: Selected range totals (with explicit range in label)
 # =========================
+# Compute selected range from the filtered rows (inclusive)
+sel_start = df["Period"].min().to_period("M").to_timestamp()
+sel_end   = df["Period"].max().to_period("M").to_timestamp()
+range_label = sel_start.strftime("%b %Y") if sel_start == sel_end else f"{sel_start.strftime('%b %Y')} – {sel_end.strftime('%b %Y')}"
+
 sel_vol = df["Volume"].sum()
 sel_val = df["Value"].sum()
+
 k0a, k0b = st.columns(2)
-k0a.metric(f"{series} • Volume (Selected Filter)", _humanize(sel_vol), help="Sum of Volume for the exact months/years you selected.")
-k0b.metric(f"{series} • Value (Selected Filter)", _humanize(sel_val, is_money=True), help="Sum of Value (₱) for the exact months/years you selected.")
+k0a.metric(f"{series} • Volume ({range_label})", _humanize(sel_vol), help="Sum of Volume for the selected inclusive month range.")
+k0b.metric(f"{series} • Value ({range_label})", _humanize(sel_val, is_money=True), help="Sum of Value (₱) for the selected inclusive month range.")
 st.divider()
 
 
@@ -441,7 +447,7 @@ k6.metric("Latest Year Value", _humanize(a_val, is_money=True), f"{'' if a_val_y
 with st.expander("Definitions"):
     st.markdown(
         """
-- **Selected Filter totals (top)**: Sum of the exact months & years you picked  
+- **Selected period totals (top)**: Sum of the exact months & years you picked (inclusive)  
 - **Quarterly**: Sum per calendar quarter  
 - **Annual**: Sum per calendar year  
 - **YTM (Year-to-Month)**: January to the selected month of the current year; YoY vs the same Jan–month range last year  

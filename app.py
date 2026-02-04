@@ -1,11 +1,5 @@
 # app.py
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
-# Updates in this version:
-# - Single filter section: "Date Range" (no other modes)
-# - Slider for month range + dropdowns (Start Year | Start Month; End Year | End Month)
-# - "Apply dropdown period" safely updates the slider (via session_state + st.rerun) to avoid StreamlitAPIException
-# - Monthly/Quarterly/Annual tables: latest rows first; Annual shows Year (left-aligned)
-# - Typo fix in KPI fallback assignment
 
 from __future__ import annotations
 
@@ -240,7 +234,7 @@ if df0.empty:
 def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
     """
     Single 'Date Range' filter with:
-      - Month slider (primary)
+      - Month slider (rendered FIRST)
       - Dropdowns (Start Year | Start Month; End Year | End Month) + 'Apply dropdown period' button
     Uses session_state and st.rerun() to safely apply dropdowns to slider.
     """
@@ -253,17 +247,26 @@ def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> p
     slider_key = f"{key_prefix}_date_range_slider"
     default_span = (min_m.to_pydatetime(), max_m.to_pydatetime())
 
-    # Current slider selection (or default full span)
-    cur_start_dt, cur_end_dt = st.session_state.get(slider_key, default_span)
-    cur_start = pd.Timestamp(cur_start_dt).to_period("M").to_timestamp()
-    cur_end   = pd.Timestamp(cur_end_dt).to_period("M").to_timestamp()
+    # --- SLIDER FIRST (uses existing session value or default)
+    start_dt, end_dt = st.sidebar.slider(
+        "Select Start and End Month",
+        min_value=min_m.to_pydatetime(),
+        max_value=max_m.to_pydatetime(),
+        value=st.session_state.get(slider_key, default_span),
+        format="YYYY-MM",
+        key=slider_key,
+    )
 
-    # --- Dropdowns first so we can set session value BEFORE rendering the slider
+    # --- DROPDOWNS BELOW THE SLIDER
     st.sidebar.markdown("**Or set via dropdowns:**")
 
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
     month_to_num = {m: i + 1 for i, m in enumerate(months)}
     years = list(range(int(min_m.year), int(max_m.year) + 1))
+
+    # Use current slider selection to preselect dropdowns
+    cur_start = pd.Timestamp(start_dt).to_period("M").to_timestamp()
+    cur_end   = pd.Timestamp(end_dt).to_period("M").to_timestamp()
 
     # Row 1: Start Year | Start Month
     row1_col1, row1_col2 = st.sidebar.columns(2)
@@ -299,7 +302,7 @@ def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> p
             key=f"{key_prefix}_end_month",
         )
 
-    # Apply dropdowns -> update session and rerun so the slider is created with the new value
+    # Apply dropdowns -> update session and rerun so the slider (rendered first) picks up the new value
     if st.sidebar.button("Apply dropdown period", key=f"{key_prefix}_apply_dropdown"):
         beg_period = pd.Timestamp(int(start_year), month_to_num[start_month], 1)
         end_period = pd.Timestamp(int(end_year), month_to_num[end_month], 1)
@@ -311,16 +314,6 @@ def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> p
         else:
             st.session_state[slider_key] = (beg_period.to_pydatetime(), end_period.to_pydatetime())
             st.rerun()
-
-    # --- Now render the slider using the (possibly updated) session value
-    start_dt, end_dt = st.sidebar.slider(
-        "Select Start and End Month",
-        min_value=min_m.to_pydatetime(),
-        max_value=max_m.to_pydatetime(),
-        value=st.session_state.get(slider_key, default_span),
-        format="YYYY-MM",
-        key=slider_key,
-    )
 
     # Inclusive filter normalized to month starts
     beg = pd.Timestamp(start_dt).to_period("M").to_timestamp()

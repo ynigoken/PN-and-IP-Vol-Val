@@ -1,6 +1,7 @@
 # app.py
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 
+
 from __future__ import annotations
 
 import re
@@ -16,9 +17,8 @@ import streamlit as st
 # =========================
 # App config
 # =========================
+# Keep neutral page config; dynamic visible title/caption will change per stream below.
 st.set_page_config(page_title="PESONet and InstaPay Volume and Value", layout="wide")
-st.title("PESONet and InstaPay Volume and Value")
-st.caption("PESONet Source: Philippine Clearing House Corporation · InstaPay Source: BancNet")
 
 DATA_FILE = "PN and IP Database.xlsx"  # keep the file in the repo root
 
@@ -222,21 +222,46 @@ AVAILABLE_SERIES = list(data.keys())  # e.g., ["PESONet", "InstaPay"]
 
 
 # =========================
-# Sidebar - choose series & Date Range
+# Sidebar - choose series
 # =========================
 series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0, key="series_choice")
+
+# ---- Dynamic title & source per series (visible header)
+TITLE_BY_SERIES = {
+    "PESONet": "PESONet Volume and Value",
+    "InstaPay": "InstaPay Volume and Value",
+}
+SOURCE_BY_SERIES = {
+    "PESONet": "Source: Philippine Clearing House Corporation",
+    "InstaPay": "Source: BancNet",
+}
+title_text = TITLE_BY_SERIES.get(series, "Volume and Value")
+source_text = SOURCE_BY_SERIES.get(series, "Source")
+
+st.title(title_text)
+st.caption(source_text)
+
+# (Optional) also update browser tab title
+st.markdown(f"""
+    <script>document.title = "{title_text}";</script>
+""", unsafe_allow_html=True)
+
 df0 = data[series].copy()
 if df0.empty:
     st.warning("The selected series has no rows.")
     st.stop()
 
 
+# =========================
+# Date Range controls (Slider FIRST, then dropdowns)
+# =========================
 def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
     """
     Single 'Date Range' filter with:
       - Month slider (rendered FIRST)
       - Dropdowns (Start Year | Start Month; End Year | End Month) + 'Apply dropdown period' button
-    Uses session_state and st.rerun() to safely apply dropdowns to slider.
+    Uses a PENDING value in session state + st.rerun() to safely apply dropdowns to the slider
+    without mutating the slider's value after it's created.
     """
     st.sidebar.header("Date Range")
 
@@ -245,7 +270,23 @@ def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> p
     max_m = df_for_series["Period"].max().to_period("M").to_timestamp()
 
     slider_key = f"{key_prefix}_date_range_slider"
+    pending_key = f"{key_prefix}_date_range_pending"
     default_span = (min_m.to_pydatetime(), max_m.to_pydatetime())
+
+    # --- PRE-APPLY any pending value BEFORE the slider is created
+    if pending_key in st.session_state:
+        try:
+            pend_start, pend_end = st.session_state[pending_key]
+            pend_start = pd.Timestamp(pend_start).to_period("M").to_timestamp()
+            pend_end   = pd.Timestamp(pend_end).to_period("M").to_timestamp()
+            # clamp & validate
+            pend_start = max(pend_start, min_m)
+            pend_end   = min(pend_end, max_m)
+            if pend_start <= pend_end:
+                st.session_state[slider_key] = (pend_start.to_pydatetime(), pend_end.to_pydatetime())
+        finally:
+            # always clear the pending directive
+            del st.session_state[pending_key]
 
     # --- SLIDER FIRST (uses existing session value or default)
     start_dt, end_dt = st.sidebar.slider(
@@ -302,17 +343,18 @@ def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> p
             key=f"{key_prefix}_end_month",
         )
 
-    # Apply dropdowns -> update session and rerun so the slider (rendered first) picks up the new value
+    # Apply dropdowns -> store PENDING (not the slider value) and rerun
     if st.sidebar.button("Apply dropdown period", key=f"{key_prefix}_apply_dropdown"):
         beg_period = pd.Timestamp(int(start_year), month_to_num[start_month], 1)
         end_period = pd.Timestamp(int(end_year), month_to_num[end_month], 1)
+        # clamp
         beg_period = max(beg_period, min_m)
         end_period = min(end_period, max_m)
 
         if beg_period > end_period:
             st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
         else:
-            st.session_state[slider_key] = (beg_period.to_pydatetime(), end_period.to_pydatetime())
+            st.session_state[pending_key] = (beg_period.to_pydatetime(), end_period.to_pydatetime())
             st.rerun()
 
     # Inclusive filter normalized to month starts

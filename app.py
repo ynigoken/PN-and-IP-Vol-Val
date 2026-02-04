@@ -1,10 +1,12 @@
 # app.py
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
-# Updates:
-# - Tables show latest rows first (Monthly, Quarterly, Annual)
+# Updates in this version:
+# - Single filter mode: "Date Range"
+# - Brought back the month slider and added dropdowns with an "Apply" button
+# - Dropdown layout: Start Year | Start Month (row 1); End Year | End Month (row 2)
+# - Annual table shows latest year first and Year is left-aligned (TextColumn)
+# - Monthly/Quarterly/Annual tables: latest rows first for display and CSV
 # - Typo fix in KPI fallback assignment
-# - FILTERS: removed years/months multi-selects; both modes now require Begin/End Period via Month+Year dropdowns
-# - Annual table: includes 'Year' column, left-aligned, and latest-first display
 
 from __future__ import annotations
 
@@ -141,14 +143,12 @@ def _safe_pct(new: float, base: float) -> float | None:
 
 def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame:
     """
-    Return a copy with formatted display columns for Period (optional), Volume, Value, and keep Year/Quarter if present.
+    Return a copy with formatted display columns for Period (optional), Volume, Value.
+    Keeps Year/Quarter columns if present (no type conversion here).
     """
     t = df_in.copy()
     if period_fmt and "Period" in t.columns:
         t["Period"] = t["Period"].dt.strftime("%b-%Y")
-    # Convert Year to string for left alignment in Streamlit (TextColumn aligns left)
-    if "Year" in t.columns:
-        t["Year"] = t["Year"].astype("Int64").astype(str)
     t["Volume_display"] = t["Volume"].map(lambda x: "—" if pd.isna(x) else f"{x:,.0f}")
     t["Value_display"]  = t["Value"].map(lambda x: "—" if pd.isna(x) else f"₱{x:,.1f}")
     cols: List[str] = []
@@ -206,7 +206,6 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     ), secondary_y=False)
 
     fig.update_traces(selector=dict(type="bar"), opacity=0.55)
-    # ensure line on top
     if any(t.type == "scatter" for t in fig.data):
         bars = [t for t in fig.data if t.type != "scatter"]
         lines = [t for t in fig.data if t.type == "scatter"]
@@ -232,7 +231,7 @@ AVAILABLE_SERIES = list(data.keys())  # e.g., ["PESONet", "InstaPay"]
 
 
 # =========================
-# Sidebar - choose series first & filters
+# Sidebar - choose series first & Date Range filter
 # =========================
 series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0, key="series_choice")
 df0 = data[series].copy()
@@ -241,76 +240,78 @@ if df0.empty:
     st.stop()
 
 
-def _month_year_period_controls(df_for_series: pd.DataFrame, key_prefix: str, label_prefix: str) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """
-    Render two blocks in the sidebar, each with Month and Year selectboxes (Begin/End).
-    Returns (begin_period_timestamp, end_period_timestamp) at month start.
-    """
-    min_d = df_for_series["Period"].min()
-    max_d = df_for_series["Period"].max()
+def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
+    st.sidebar.header("Date Range")
 
-    # Build choices
-    months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-    month_to_num = {m: i+1 for i, m in enumerate(months)}
-    years = list(range(int(min_d.year), int(max_d.year) + 1))
+    min_d = df_for_series["Period"].min().to_period("M").to_timestamp()
+    max_d = df_for_series["Period"].max().to_period("M").to_timestamp()
 
-    st.sidebar.caption(f"**Select {label_prefix} Begin & End Period (required)**")
-    col_beg, col_end = st.sidebar.columns(2)
+    slider_key = f"{key_prefix}_date_range_slider"
 
-    # Defaults: earliest month/year to latest month/year in data
-    beg_m_default = months[min_d.month - 1]
-    beg_y_default = min_d.year
-    end_m_default = months[max_d.month - 1]
-    end_y_default = max_d.year
+    # Defaults for slider
+    default_value = (min_d.to_pydatetime(), max_d.to_pydatetime())
+    value_for_slider = st.session_state.get(slider_key, default_value)
 
-    with col_beg:
-        beg_month = st.selectbox("Begin Month", options=months, index=months.index(beg_m_default), key=f"{key_prefix}_beg_month")
-        beg_year  = st.selectbox("Begin Year",  options=years,  index=years.index(beg_y_default), key=f"{key_prefix}_beg_year")
-    with col_end:
-        end_month = st.selectbox("End Month", options=months, index=months.index(end_m_default), key=f"{key_prefix}_end_month")
-        end_year  = st.selectbox("End Year",  options=years,  index=years.index(end_y_default), key=f"{key_prefix}_end_year")
-
-    # Construct timestamps at month start
-    beg_period = pd.Timestamp(year=int(beg_year), month=int(month_to_num[beg_month]), day=1)
-    end_period = pd.Timestamp(year=int(end_year), month=int(month_to_num[end_month]), day=1)
-
-    # Clamp to available data bounds
-    beg_period = max(beg_period, min_d.to_period("M").to_timestamp())
-    end_period = min(end_period, max_d.to_period("M").to_timestamp())
-
-    if beg_period > end_period:
-        st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
-    return beg_period, end_period
-
-
-def _filter_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
-    st.sidebar.header("Controls")
-    mode = st.sidebar.radio(
-        "Filter mode",
-        options=["Range", "Pick months & years"],
-        index=0,
-        key=f"{key_prefix}_mode",
-        help="Choose how you prefer to pick Begin and End Period.",
+    # Month slider (primary control)
+    start_dt, end_dt = st.sidebar.slider(
+        "Select Start and End Month",
+        min_value=min_d.to_pydatetime(),
+        max_value=max_d.to_pydatetime(),
+        value=value_for_slider,
+        format="YYYY-MM",
+        key=slider_key,
     )
 
-    # Regardless of mode, we now require Begin/End via Month+Year dropdowns
-    if mode == "Range":
-        beg_period, end_period = _month_year_period_controls(df_for_series, f"{key_prefix}_range", "Range")
-    else:
-        beg_period, end_period = _month_year_period_controls(df_for_series, f"{key_prefix}_pick", "Pick")
+    # Dropdowns (alternative input)
+    st.sidebar.markdown("**Or set via dropdowns:**")
 
-    # Validate and apply filter (inclusive)
-    if beg_period is None or end_period is None or beg_period > end_period:
-        # Return empty DF so that we show a friendly message above
+    months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    years = list(range(int(min_d.year), int(max_d.year) + 1))
+    month_to_num = {m: i+1 for i, m in enumerate(months)}
+
+    # Row 1: Start Year | Start Month
+    row1_col1, row1_col2 = st.sidebar.columns(2)
+    with row1_col1:
+        start_year = st.selectbox("Start Year", options=years, index=years.index(min_d.year), key=f"{key_prefix}_start_year")
+    with row1_col2:
+        start_month = st.selectbox("Start Month", options=months, index=min_d.month - 1, key=f"{key_prefix}_start_month")
+
+    # Row 2: End Year | End Month
+    row2_col1, row2_col2 = st.sidebar.columns(2)
+    with row2_col1:
+        end_year = st.selectbox("End Year", options=years, index=years.index(max_d.year), key=f"{key_prefix}_end_year")
+    with row2_col2:
+        end_month = st.selectbox("End Month", options=months, index=max_d.month - 1, key=f"{key_prefix}_end_month")
+
+    # Apply button: set slider from dropdowns
+    if st.sidebar.button("Apply dropdown period", key=f"{key_prefix}_apply_dropdown"):
+        beg_period = pd.Timestamp(year=int(start_year), month=int(month_to_num[start_month]), day=1)
+        end_period = pd.Timestamp(year=int(end_year), month=int(month_to_num[end_month]), day=1)
+        # clamp
+        beg_period = max(beg_period, min_d)
+        end_period = min(end_period, max_d)
+
+        if beg_period > end_period:
+            st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
+        else:
+            st.session_state[slider_key] = (beg_period.to_pydatetime(), end_period.to_pydatetime())
+            start_dt, end_dt = st.session_state[slider_key]
+
+    # Normalize to month starts (inclusive range)
+    beg = pd.Timestamp(start_dt).to_period("M").to_timestamp()
+    end = pd.Timestamp(end_dt).to_period("M").to_timestamp()
+
+    if beg > end:
+        st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
         return df_for_series.iloc[0:0]
 
-    d = df_for_series[(df_for_series["Period"] >= beg_period) & (df_for_series["Period"] <= end_period)]
+    d = df_for_series[(df_for_series["Period"] >= beg) & (df_for_series["Period"] <= end)]
     return d
 
 
-df = _filter_controls(df0, key_prefix=series)
+df = _date_range_controls(df0, key_prefix=series)
 if df.empty:
-    st.info("No data for the chosen filters or invalid period range.")
+    st.info("No data for the chosen period.")
     st.stop()
 
 st.divider()
@@ -458,7 +459,7 @@ with tab_annual:
     ta = _agg_annual(df0)
     ta_latest_first = ta.iloc[::-1].copy()
 
-    # Ensure Year shows as left-aligned by using string for display
+    # Convert Year to string to ensure left alignment via TextColumn
     ta_latest_first_display = ta_latest_first.copy()
     ta_latest_first_display["Year"] = ta_latest_first_display["Year"].astype("Int64").astype(str)
 
@@ -469,8 +470,7 @@ with tab_annual:
         use_container_width=True,
         hide_index=True,
         column_config={
-            # TextColumn aligns left
-            "Year": st.column_config.TextColumn(),
+            "Year": st.column_config.TextColumn(),  # left-aligned
             "Volume": st.column_config.TextColumn(help="Integers with comma separators"),
             "Value": st.column_config.TextColumn(help="₱, commas, one decimal"),
         },

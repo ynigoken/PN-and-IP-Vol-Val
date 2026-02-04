@@ -1,11 +1,10 @@
 # app.py
 # Streamlit app to visualize monthly, quarterly, annual, YTM/YTD metrics
 # Updates in this version:
-# - Single filter mode: "Date Range"
-# - Brought back the month slider and added dropdowns with an "Apply" button
-# - Dropdown layout: Start Year | Start Month (row 1); End Year | End Month (row 2)
-# - Annual table shows latest year first and Year is left-aligned (TextColumn)
-# - Monthly/Quarterly/Annual tables: latest rows first for display and CSV
+# - Single filter section: "Date Range" (no other modes)
+# - Slider for month range + dropdowns (Start Year | Start Month; End Year | End Month)
+# - "Apply dropdown period" safely updates the slider (via session_state + st.rerun) to avoid StreamlitAPIException
+# - Monthly/Quarterly/Annual tables: latest rows first; Annual shows Year (left-aligned)
 # - Typo fix in KPI fallback assignment
 
 from __future__ import annotations
@@ -89,6 +88,9 @@ def _load_excel(file_path: str) -> Dict[str, pd.DataFrame]:
 
 
 def _humanize(x: float | int, is_money: bool = False) -> str:
+    """
+    Format with one decimal & suffix; ₱ when money.
+    """
     if x is None or pd.isna(x):
         return "—"
     absx = abs(x)
@@ -97,14 +99,11 @@ def _humanize(x: float | int, is_money: bool = False) -> str:
     billion  = 1_000_000_000
     million  = 1_000_000
     if absx >= trillion:
-        num = absx / trillion
-        text = f"{sign}{num:,.1f}T"
+        text = f"{sign}{absx/trillion:,.1f}T"
     elif absx >= billion:
-        num = absx / billion
-        text = f"{sign}{num:,.1f}B"
+        text = f"{sign}{absx/billion:,.1f}B"
     elif absx >= million:
-        num = absx / million
-        text = f"{sign}{num:,.1f}M"
+        text = f"{sign}{absx/million:,.1f}M"
     else:
         text = f"{sign}{absx:,.1f}"
     return f"₱{text}" if is_money else text
@@ -144,7 +143,7 @@ def _safe_pct(new: float, base: float) -> float | None:
 def _format_table(df_in: pd.DataFrame, period_fmt: bool = False) -> pd.DataFrame:
     """
     Return a copy with formatted display columns for Period (optional), Volume, Value.
-    Keeps Year/Quarter columns if present (no type conversion here).
+    Keeps Year/Quarter when present.
     """
     t = df_in.copy()
     if period_fmt and "Period" in t.columns:
@@ -179,19 +178,17 @@ def _ticks_value_default() -> tuple[list[float], list[str]]:
 
 
 def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure:
-    dark_blue = "#003366"
-    green     = "#2ca02c"
-    red       = "#d62728"
+    """
+    Volume = BAR on RIGHT; Value = LINE on LEFT. Line on top.
+    """
+    dark_blue = "#003366"; green = "#2ca02c"; red = "#d62728"
     if series.lower() == "pesonet":
         bar_color, line_color = green, dark_blue
-        v_vals, v_text = _ticks_volume_pesonet()
-        v_range = [0, 10e6]
+        v_vals, v_text = _ticks_volume_pesonet(); v_range = [0, 10e6]
     else:
         bar_color, line_color = red, dark_blue
-        v_vals, v_text = _ticks_volume_default()
-        v_range = [0, 800e6]
-    b_vals, b_text = _ticks_value_default()
-    b_range = [0, 1.4e12]
+        v_vals, v_text = _ticks_volume_default(); v_range = [0, 800e6]
+    b_vals, b_text = _ticks_value_default(); b_range = [0, 1.4e12]
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(go.Bar(
@@ -201,7 +198,7 @@ def _bar_line_chart(df: pd.DataFrame, series: str, title: str = "") -> go.Figure
     ), secondary_y=True)
     fig.add_trace(go.Scatter(
         x=df["Period"], y=df["Value"], mode="lines+markers", name="Value (₱)",
-        line=dict(color=line_color, width=3), marker=dict(size=5, color=line_color),
+        line=dict(color=dark_blue, width=3), marker=dict(size=5, color=dark_blue),
         hovertemplate="%{x|%Y-%m} • Value: ₱%{y:,.1f}<extra></extra>",
     ), secondary_y=False)
 
@@ -231,7 +228,7 @@ AVAILABLE_SERIES = list(data.keys())  # e.g., ["PESONet", "InstaPay"]
 
 
 # =========================
-# Sidebar - choose series first & Date Range filter
+# Sidebar - choose series & Date Range
 # =========================
 series = st.sidebar.radio("Payment stream", options=AVAILABLE_SERIES, index=0, key="series_choice")
 df0 = data[series].copy()
@@ -241,63 +238,91 @@ if df0.empty:
 
 
 def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> pd.DataFrame:
+    """
+    Single 'Date Range' filter with:
+      - Month slider (primary)
+      - Dropdowns (Start Year | Start Month; End Year | End Month) + 'Apply dropdown period' button
+    Uses session_state and st.rerun() to safely apply dropdowns to slider.
+    """
     st.sidebar.header("Date Range")
 
-    min_d = df_for_series["Period"].min().to_period("M").to_timestamp()
-    max_d = df_for_series["Period"].max().to_period("M").to_timestamp()
+    # Normalize bounds to the first day of month
+    min_m = df_for_series["Period"].min().to_period("M").to_timestamp()
+    max_m = df_for_series["Period"].max().to_period("M").to_timestamp()
 
     slider_key = f"{key_prefix}_date_range_slider"
+    default_span = (min_m.to_pydatetime(), max_m.to_pydatetime())
 
-    # Defaults for slider
-    default_value = (min_d.to_pydatetime(), max_d.to_pydatetime())
-    value_for_slider = st.session_state.get(slider_key, default_value)
+    # Current slider selection (or default full span)
+    cur_start_dt, cur_end_dt = st.session_state.get(slider_key, default_span)
+    cur_start = pd.Timestamp(cur_start_dt).to_period("M").to_timestamp()
+    cur_end   = pd.Timestamp(cur_end_dt).to_period("M").to_timestamp()
 
-    # Month slider (primary control)
-    start_dt, end_dt = st.sidebar.slider(
-        "Select Start and End Month",
-        min_value=min_d.to_pydatetime(),
-        max_value=max_d.to_pydatetime(),
-        value=value_for_slider,
-        format="YYYY-MM",
-        key=slider_key,
-    )
-
-    # Dropdowns (alternative input)
+    # --- Dropdowns first so we can set session value BEFORE rendering the slider
     st.sidebar.markdown("**Or set via dropdowns:**")
 
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-    years = list(range(int(min_d.year), int(max_d.year) + 1))
-    month_to_num = {m: i+1 for i, m in enumerate(months)}
+    month_to_num = {m: i + 1 for i, m in enumerate(months)}
+    years = list(range(int(min_m.year), int(max_m.year) + 1))
 
     # Row 1: Start Year | Start Month
     row1_col1, row1_col2 = st.sidebar.columns(2)
     with row1_col1:
-        start_year = st.selectbox("Start Year", options=years, index=years.index(min_d.year), key=f"{key_prefix}_start_year")
+        start_year = st.selectbox(
+            "Start Year",
+            options=years,
+            index=years.index(int(cur_start.year)),
+            key=f"{key_prefix}_start_year",
+        )
     with row1_col2:
-        start_month = st.selectbox("Start Month", options=months, index=min_d.month - 1, key=f"{key_prefix}_start_month")
+        start_month = st.selectbox(
+            "Start Month",
+            options=months,
+            index=int(cur_start.month) - 1,
+            key=f"{key_prefix}_start_month",
+        )
 
     # Row 2: End Year | End Month
     row2_col1, row2_col2 = st.sidebar.columns(2)
     with row2_col1:
-        end_year = st.selectbox("End Year", options=years, index=years.index(max_d.year), key=f"{key_prefix}_end_year")
+        end_year = st.selectbox(
+            "End Year",
+            options=years,
+            index=years.index(int(cur_end.year)),
+            key=f"{key_prefix}_end_year",
+        )
     with row2_col2:
-        end_month = st.selectbox("End Month", options=months, index=max_d.month - 1, key=f"{key_prefix}_end_month")
+        end_month = st.selectbox(
+            "End Month",
+            options=months,
+            index=int(cur_end.month) - 1,
+            key=f"{key_prefix}_end_month",
+        )
 
-    # Apply button: set slider from dropdowns
+    # Apply dropdowns -> update session and rerun so the slider is created with the new value
     if st.sidebar.button("Apply dropdown period", key=f"{key_prefix}_apply_dropdown"):
-        beg_period = pd.Timestamp(year=int(start_year), month=int(month_to_num[start_month]), day=1)
-        end_period = pd.Timestamp(year=int(end_year), month=int(month_to_num[end_month]), day=1)
-        # clamp
-        beg_period = max(beg_period, min_d)
-        end_period = min(end_period, max_d)
+        beg_period = pd.Timestamp(int(start_year), month_to_num[start_month], 1)
+        end_period = pd.Timestamp(int(end_year), month_to_num[end_month], 1)
+        beg_period = max(beg_period, min_m)
+        end_period = min(end_period, max_m)
 
         if beg_period > end_period:
             st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
         else:
             st.session_state[slider_key] = (beg_period.to_pydatetime(), end_period.to_pydatetime())
-            start_dt, end_dt = st.session_state[slider_key]
+            st.rerun()
 
-    # Normalize to month starts (inclusive range)
+    # --- Now render the slider using the (possibly updated) session value
+    start_dt, end_dt = st.sidebar.slider(
+        "Select Start and End Month",
+        min_value=min_m.to_pydatetime(),
+        max_value=max_m.to_pydatetime(),
+        value=st.session_state.get(slider_key, default_span),
+        format="YYYY-MM",
+        key=slider_key,
+    )
+
+    # Inclusive filter normalized to month starts
     beg = pd.Timestamp(start_dt).to_period("M").to_timestamp()
     end = pd.Timestamp(end_dt).to_period("M").to_timestamp()
 
@@ -305,8 +330,7 @@ def _date_range_controls(df_for_series: pd.DataFrame, key_prefix: str = "") -> p
         st.sidebar.error("Begin Period must be earlier than or equal to End Period.")
         return df_for_series.iloc[0:0]
 
-    d = df_for_series[(df_for_series["Period"] >= beg) & (df_for_series["Period"] <= end)]
-    return d
+    return df_for_series[(df_for_series["Period"] >= beg) & (df_for_series["Period"] <= end)]
 
 
 df = _date_range_controls(df0, key_prefix=series)
@@ -363,6 +387,7 @@ if not a_agg.empty:
     else:
         a_vol_yoy = a_val_yoy = None
 else:
+    # Typo fix: include a_vol_yoy here as well
     a_vol = a_val = a_vol_yoy = a_val_yoy = None
 
 k1, k2, k3, k4 = st.columns(4)

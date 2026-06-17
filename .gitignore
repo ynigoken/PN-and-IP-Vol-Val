@@ -1,15 +1,25 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
 venv/
+.env
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
 
-# Data (avoid committing sensitive files)
+# Local data files (app fetches live from BSP — no local files needed)
 *.xlsx
 *.csv
 
 # OS
 .DS_Store
+Thumbs.db
+
+# Windows dev scripts (local only)
+openEnv.bat
+
+# IDEs
+.vscode/
+.idea/

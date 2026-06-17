@@ -5,8 +5,11 @@
 from __future__ import annotations
 
 import io
+import json
 import re
-from typing import Dict, List, Tuple
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -43,57 +46,118 @@ SERIES_COLOR: Dict[str, str] = {
     "InstaPay": "#dc2626",  # red-600
 }
 
-LINE_COLOR = "#1e3a5f"   # dark navy for Value line (both series)
+LINE_COLOR  = "#1e3a5f"   # dark navy for Value line (both series)
+
+# Local fallback cache directory (gitignored)
+CACHE_DIR = Path(__file__).parent / ".cache"
 
 # ─────────────────────────────────────────────
 # CSS INJECTION
+# Scoped carefully so sidebar dark theme does NOT
+# bleed into main-content widget colours.
 # ─────────────────────────────────────────────
-# AMENDMENT 5 — replaces zero custom styling in old app
 def _inject_css() -> None:
     st.markdown(
         """
         <style>
-        /* ── Sidebar branding ── */
-        [data-testid="stSidebar"] {
+        /* ════════════════════════════════════════
+           MAIN CANVAS — always light
+           ════════════════════════════════════════ */
+        [data-testid="stAppViewContainer"] > .main {
+            background-color: #f8fafc;
+        }
+        /* Force all main-content text to dark so it
+           reads on the light canvas regardless of the
+           user's OS dark-mode setting */
+        [data-testid="stAppViewContainer"] > .main,
+        [data-testid="stAppViewContainer"] > .main p,
+        [data-testid="stAppViewContainer"] > .main span,
+        [data-testid="stAppViewContainer"] > .main h1,
+        [data-testid="stAppViewContainer"] > .main h2,
+        [data-testid="stAppViewContainer"] > .main h3,
+        [data-testid="stAppViewContainer"] > .main h4,
+        [data-testid="stAppViewContainer"] > .main label {
+            color: #1e293b;
+        }
+
+        /* ════════════════════════════════════════
+           SIDEBAR — dark navy, scoped tightly
+           ════════════════════════════════════════ */
+        [data-testid="stSidebar"] > div:first-child {
             background: linear-gradient(180deg, #0f2044 0%, #1a3560 100%);
         }
-        [data-testid="stSidebar"] * { color: #e8edf4 !important; }
-        [data-testid="stSidebar"] .stRadio label { font-weight: 600; }
-        [data-testid="stSidebar"] hr { border-color: #2e4d7b; }
+        /* Only colour direct text nodes inside the sidebar;
+           do NOT use a bare * selector — that would nuke
+           Streamlit's internal widget colour tokens */
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] div.stMarkdown,
+        [data-testid="stSidebar"] div.stRadio > label,
+        [data-testid="stSidebar"] .stSelectbox label,
+        [data-testid="stSidebar"] .stSlider label {
+            color: #dce8f5 !important;
+        }
+        [data-testid="stSidebar"] hr {
+            border-color: #2e4d7b !important;
+        }
+        /* Slider track */
+        [data-testid="stSidebar"] [data-testid="stSlider"] div[data-baseweb="slider"] div {
+            background: #3b6abf;
+        }
 
-        /* ── Metric card lift ── */
+        /* ════════════════════════════════════════
+           METRIC CARDS
+           ════════════════════════════════════════ */
         [data-testid="stMetric"] {
-            background: #f8fafc;
+            background: #ffffff;
             border: 1px solid #e2e8f0;
             border-radius: 10px;
-            padding: 14px 18px;
-            box-shadow: 0 1px 4px rgba(0,0,0,.06);
+            padding: 14px 18px 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,.07);
         }
-        [data-testid="stMetricLabel"] { font-size: .78rem; color: #64748b !important; }
-        [data-testid="stMetricValue"] { font-size: 1.55rem; font-weight: 700; }
+        /* Label row — muted grey */
+        [data-testid="stMetricLabel"] > div {
+            color: #64748b !important;
+            font-size: .78rem !important;
+        }
+        /* Value row — prominent dark */
+        [data-testid="stMetricValue"] > div {
+            color: #0f172a !important;
+            font-size: 1.5rem !important;
+            font-weight: 700 !important;
+        }
+        /* Delta row colours preserved (green/red) */
+        [data-testid="stMetricDelta"] svg { display: none; }
 
-        /* ── Tab strip ── */
+        /* ════════════════════════════════════════
+           TABS
+           ════════════════════════════════════════ */
         [data-testid="stTabs"] [role="tab"] {
             font-weight: 600;
             font-size: .88rem;
-            padding: 6px 18px;
+            color: #475569;
+        }
+        [data-testid="stTabs"] [aria-selected="true"] {
+            color: #0f172a !important;
+            border-bottom-color: #3b6abf !important;
         }
 
-        /* ── Download buttons ── */
+        /* ════════════════════════════════════════
+           DOWNLOAD BUTTONS
+           ════════════════════════════════════════ */
         [data-testid="stDownloadButton"] > button {
-            background: #f1f5f9;
-            border: 1px solid #cbd5e1;
+            background: #f1f5f9 !important;
+            border: 1px solid #cbd5e1 !important;
+            color: #334155 !important;
             border-radius: 6px;
             font-size: .82rem;
         }
 
-        /* ── Divider tighter ── */
-        hr { margin: .6rem 0 !important; }
-
-        /* ── Page background ── */
-        [data-testid="stAppViewContainer"] > .main {
-            background: #ffffff;
-        }
+        /* ════════════════════════════════════════
+           DIVIDER
+           ════════════════════════════════════════ */
+        hr { margin: .5rem 0 !important; border-color: #e2e8f0 !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -101,118 +165,182 @@ def _inject_css() -> None:
 
 
 # ─────────────────────────────────────────────
-# DATA LOADING  (AMENDMENT 1-3)
-# Replaces _load_excel(file_path) which required a local .xlsx
-# Now fetches both BSP URLs; cached for 1 hour (ttl=3600)
+# CACHE HELPERS  (issue 2 — offline fallback)
+# On every successful fetch the raw bytes are
+# written to .cache/<name>.parquet + a JSON
+# sidecar with the fetch timestamp.
+# If BSP is unreachable the parquet is loaded
+# and a warning banner is shown.
 # ─────────────────────────────────────────────
+def _cache_path(name: str) -> Path:
+    return CACHE_DIR / f"{name}.parquet"
+
+def _meta_path(name: str) -> Path:
+    return CACHE_DIR / f"{name}_meta.json"
+
+def _save_cache(name: str, df: pd.DataFrame) -> None:
+    """Persist df + fetch timestamp to .cache/."""
+    CACHE_DIR.mkdir(exist_ok=True)
+    df.to_parquet(_cache_path(name), index=False)
+    _meta_path(name).write_text(
+        json.dumps({"fetched_at": datetime.now(timezone.utc).isoformat()})
+    )
+
+def _load_cache(name: str) -> Optional[Tuple[pd.DataFrame, str]]:
+    """Return (df, fetched_at_str) from disk, or None if no cache exists."""
+    cp = _cache_path(name)
+    mp = _meta_path(name)
+    if not cp.exists():
+        return None
+    df = pd.read_parquet(cp)
+    fetched_at = "unknown time"
+    if mp.exists():
+        try:
+            meta = json.loads(mp.read_text())
+            fetched_at = meta.get("fetched_at", fetched_at)
+        except Exception:
+            pass
+    return df, fetched_at
+
+
+def _parse_bsp_bytes(name: str, raw_bytes: bytes) -> Optional[pd.DataFrame]:
+    """
+    Parse the in-memory BSP XLSX bytes into a clean DataFrame.
+    BSP file layout:
+        Row 0  → title string
+        Row 1  → blank
+        Row 2  → headers: Period | Volume | Value
+        Row 3+ → monthly data
+    Scans for the header row dynamically.
+    """
+    raw = io.BytesIO(raw_bytes)
+
+    # Step 1 — find the header row
+    try:
+        df_scan = pd.read_excel(
+            raw, sheet_name=0, header=None,
+            engine="openpyxl", nrows=15,
+        )
+    except Exception as exc:
+        st.error(f"Could not open {name} workbook: {exc}")
+        return None
+
+    header_row = None
+    for i, row in df_scan.iterrows():
+        if any(
+            str(cell).strip().lower() == "period"
+            for cell in row.values
+            if pd.notna(cell)
+        ):
+            header_row = int(i)
+            break
+
+    if header_row is None:
+        st.error(
+            f"{name}: could not locate a 'Period' header row in the first 15 rows. "
+            f"First row seen: {list(df_scan.iloc[0])}"
+        )
+        return None
+
+    # Step 2 — re-read with the correct header
+    raw.seek(0)
+    try:
+        df = pd.read_excel(
+            raw, sheet_name=0,
+            header=header_row,
+            engine="openpyxl",
+        )
+    except Exception as exc:
+        st.error(f"Could not parse {name} data: {exc}")
+        return None
+
+    # Step 3 — normalise columns
+    df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
+    df = df.loc[:, ~df.columns.str.startswith("Unnamed:")]
+    df = df.dropna(how="all")
+
+    # Step 4 — keep recognised columns only
+    keep = [
+        c for c in
+        ["Period", "Volume", "Value",
+         "%Change in Vol", "%Change in Val", "Last12MTH", "Quarter"]
+        if c in df.columns
+    ]
+    if "Period" not in keep:
+        st.error(f"{name}: 'Period' column not found after parse. Got: {list(df.columns)}")
+        return None
+    df = df[keep].copy()
+
+    # Step 5 — parse & validate dates
+    df["Period"] = pd.to_datetime(df["Period"], errors="coerce")
+    df = df.dropna(subset=["Period"])
+    df = df[df["Period"].dt.year >= 2000]   # drop any junk pre-2000 dates
+
+    # Step 6 — coerce numerics
+    for col in ["Volume", "Value", "%Change in Vol", "%Change in Val", "Last12MTH"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Step 7 — derive helper columns
+    df["Year"]      = df["Period"].dt.year
+    df["Month"]     = df["Period"].dt.month
+    df["MonthName"] = df["Period"].dt.strftime("%b")
+    df["YearMonth"] = df["Period"].dt.to_period("M").dt.to_timestamp()
+    df["YearQ"]     = (
+        df["Period"].dt.to_period("Q")
+        .astype(str)
+        .str.replace("Q", "-Q", regex=False)
+    )
+
+    return df.sort_values("Period").reset_index(drop=True)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_all_series() -> Dict[str, pd.DataFrame]:
     """
-    Fetch PESONet and InstaPay workbooks from BSP URLs.
-
-    BSP file layout (0-indexed rows, no header passed):
-        Row 0 → title string  (e.g. "PESONet Volume and Value …")
-        Row 1 → blank
-        Row 2 → column headers: Period | Volume | Value
-        Row 3+ → monthly data
-
-    We scan for the header row dynamically so the loader is robust
-    to BSP adding/removing title rows in future updates.
+    For each series:
+      1. Try to fetch from BSP URL.
+         - On success: parse + save to .cache/ as Parquet.
+      2. On any network/HTTP failure:
+         - Load last-good Parquet from .cache/.
+         - Attach a '_stale' flag so the UI can show a warning.
+    Returns a dict keyed by series name.
+    Each value is a clean DataFrame; stale ones have a '_stale_since'
+    attribute stored in st.session_state for the warning banner.
     """
     out: Dict[str, pd.DataFrame] = {}
 
     for name, url in SOURCES.items():
+        fetched_ok = False
+        raw_bytes: Optional[bytes] = None
+
         try:
-            resp = requests.get(url, timeout=30)
+            resp = requests.get(url, timeout=20)
             resp.raise_for_status()
-            raw = io.BytesIO(resp.content)
-        except Exception as exc:
-            st.error(f"Could not reach BSP server for {name}: {exc}")
-            continue
+            raw_bytes = resp.content
+            fetched_ok = True
+        except Exception:
+            pass   # handled below
 
-        # ── Step 1: read without header to find the header row ──────────
-        try:
-            df_scan = pd.read_excel(
-                raw, sheet_name=0, header=None,
-                engine="openpyxl", nrows=15,
-            )
-        except Exception as exc:
-            st.error(f"Could not open {name} workbook: {exc}")
-            continue
+        if fetched_ok and raw_bytes:
+            df = _parse_bsp_bytes(name, raw_bytes)
+            if df is not None:
+                _save_cache(name, df)   # persist for future offline use
+                out[name] = df
+                st.session_state.pop(f"_stale_{name}", None)
+                continue
 
-        # Find the first row where any cell equals "Period" (case-insensitive)
-        header_row = None
-        for i, row in df_scan.iterrows():
-            if any(
-                str(cell).strip().lower() == "period"
-                for cell in row.values
-                if pd.notna(cell)
-            ):
-                header_row = int(i)
-                break
-
-        if header_row is None:
+        # ── Fallback: load from local cache ──────────────────────────
+        cached = _load_cache(name)
+        if cached is not None:
+            df, fetched_at = cached
+            out[name] = df
+            st.session_state[f"_stale_{name}"] = fetched_at
+        else:
             st.error(
-                f"{name}: could not find a 'Period' header in the first 15 rows. "
-                f"Columns found: {list(df_scan.iloc[0])}"
+                f"**{name}**: BSP data unavailable and no local cache found. "
+                f"Please check your internet connection and reload."
             )
-            continue
-
-        # ── Step 2: re-read with the correct header row ──────────────────
-        raw.seek(0)
-        try:
-            df = pd.read_excel(
-                raw, sheet_name=0,
-                header=header_row,
-                engine="openpyxl",
-            )
-        except Exception as exc:
-            st.error(f"Could not parse {name} data: {exc}")
-            continue
-
-        # ── Step 3: clean column names ───────────────────────────────────
-        df.columns = [re.sub(r"\s+", " ", str(c)).strip() for c in df.columns]
-
-        # Drop unnamed / all-NaN columns that openpyxl sometimes adds
-        df = df.loc[:, ~df.columns.str.startswith("Unnamed:")]
-        df = df.dropna(how="all")
-
-        # ── Step 4: keep only recognised columns ─────────────────────────
-        keep = [
-            c for c in
-            ["Period", "Volume", "Value",
-             "%Change in Vol", "%Change in Val", "Last12MTH", "Quarter"]
-            if c in df.columns
-        ]
-        if "Period" not in keep:
-            st.error(f"{name}: 'Period' column missing after parse. Cols: {list(df.columns)}")
-            continue
-
-        df = df[keep].copy()
-
-                # ── Step 5: parse dates & drop invalid rows ───────────────────────
-        df["Period"] = pd.to_datetime(df["Period"], errors="coerce")
-        df = df.dropna(subset=["Period"])
-        # Drop any rows with obviously wrong dates (year < 2000)
-        df = df[df["Period"].dt.year >= 2000]
-
-        # ── Step 6: coerce numerics ──────────────────────────────────────
-        for col in ["Volume", "Value", "%Change in Vol", "%Change in Val", "Last12MTH"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        # ── Step 7: derive helper columns ────────────────────────────────
-        df["Year"]      = df["Period"].dt.year
-        df["Month"]     = df["Period"].dt.month
-        df["MonthName"] = df["Period"].dt.strftime("%b")
-        df["YearMonth"] = df["Period"].dt.to_period("M").dt.to_timestamp()
-        df["YearQ"]     = (
-            df["Period"].dt.to_period("Q")
-            .astype(str)
-            .str.replace("Q", "-Q", regex=False)
-        )
-
-        out[name] = df.sort_values("Period").reset_index(drop=True)
 
     return out
 
@@ -495,10 +623,28 @@ with st.spinner("Fetching latest data from BSP…"):
     data = _load_all_series()
 
 if not data:
-    st.error("No data could be loaded. Check your internet connection or try again later.")
+    st.error("No data could be loaded. Check your internet connection and reload the page.")
     st.stop()
 
 AVAILABLE_SERIES = [s for s in SOURCES if s in data]   # preserve declared order
+
+# Show a single stale-data banner covering all affected series
+_stale_series = [
+    (name, st.session_state[f"_stale_{name}"])
+    for name in AVAILABLE_SERIES
+    if f"_stale_{name}" in st.session_state
+]
+if _stale_series:
+    stale_lines = "  \n".join(
+        f"- **{n}**: last successfully fetched at {ts} UTC"
+        for n, ts in _stale_series
+    )
+    st.warning(
+        f"⚠️ **BSP data source currently unreachable.** "
+        f"Showing the most recent locally cached data:\n\n{stale_lines}\n\n"
+        f"Data will refresh automatically once the BSP website is back online.",
+        icon=None,
+    )
 
 # ─────────────────────────────────────────────
 # SIDEBAR  (AMENDMENT 6 — branding + data badge)

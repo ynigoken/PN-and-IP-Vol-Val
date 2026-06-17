@@ -13,6 +13,9 @@ venv/
 *.xlsx
 *.csv
 
+# Offline fallback cache (auto-generated at runtime)
+.cache/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -436,86 +436,149 @@ def _nice_ceil(val: float, steps: int = 6) -> Tuple[float, float]:
 
 def _build_ticks(max_val: float, step: float) -> Tuple[List[float], List[str]]:
     vals = list(np.arange(0, max_val + step * 0.5, step))
-    billion, million = 1_000_000_000, 1_000_000
+    trillion = 1_000_000_000_000
+    billion  = 1_000_000_000
+    million  = 1_000_000
 
     def _label(v: float) -> str:
         if v == 0:
             return "0"
+        if max_val >= trillion:
+            return f"{v / trillion:g}T"
         if max_val >= billion:
-            return f"{v/billion:g}B"
-        return f"{v/million:g}M"
+            return f"{v / billion:g}B"
+        return f"{v / million:g}M"
 
     return vals, [_label(v) for v in vals]
 
 
-def _bar_line_chart(df: pd.DataFrame, series: str) -> go.Figure:
-    bar_color  = SERIES_COLOR[series]
-    line_color = LINE_COLOR
+# Per-series colour palettes
+# PESONet: green family  |  InstaPay: red family
+_THEME: Dict[str, Dict[str, str]] = {
+    "PESONet": {
+        "bar":        "#16a34a",   # green-600 — bars
+        "bar_border": "#15803d",   # green-700 — bar edge
+        "line":       "#052e16",   # green-950 — value line
+        "grid":       "#f0fdf4",   # green-50  — gridlines
+    },
+    "InstaPay": {
+        "bar":        "#dc2626",   # red-600
+        "bar_border": "#b91c1c",   # red-700
+        "line":       "#450a0a",   # red-950
+        "grid":       "#fff1f2",   # rose-50
+    },
+}
 
-    # ── Dynamic axis ranges (AMENDMENT 4)
+
+def _bar_line_chart(df: pd.DataFrame, series: str) -> go.Figure:
+    theme = _THEME.get(series, _THEME["PESONet"])
+
+    # Dynamic axis ceilings
     v_max, v_step = _nice_ceil(df["Volume"].max(), steps=5)
     b_max, b_step = _nice_ceil(df["Value"].max(),  steps=5)
     v_vals, v_text = _build_ticks(v_max, v_step)
     b_vals, b_text = _build_ticks(b_max, b_step)
 
+    # Bar width: 20 days in milliseconds so bars are wide and readable
+    # even when the full dataset spans 8+ years.
+    MS_PER_DAY   = 86_400_000
+    bar_width_ms = 20 * MS_PER_DAY
+
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
+    # ── Volume bars (secondary / right axis) ────────────────────────
     fig.add_trace(
         go.Bar(
-            x=df["Period"], y=df["Volume"],
+            x=df["Period"],
+            y=df["Volume"],
             name="Volume",
-            marker_color=bar_color,
-            marker_line_width=0,
-            opacity=0.55,
-            hovertemplate="%{x|%b %Y}  Volume: <b>%{y:,}</b><extra></extra>",
+            marker_color=theme["bar"],
+            marker_line_color=theme["bar_border"],
+            marker_line_width=0.4,
+            opacity=0.72,
+            width=bar_width_ms,
+            hovertemplate="%{x|%b %Y}<br>Volume: <b>%{y:,.0f}</b><extra></extra>",
         ),
         secondary_y=True,
     )
 
+    # ── Value line (primary / left axis) ──────────────────────────
     fig.add_trace(
         go.Scatter(
-            x=df["Period"], y=df["Value"],
+            x=df["Period"],
+            y=df["Value"],
             mode="lines+markers",
             name="Value (₱)",
-            line=dict(color=line_color, width=2.5),
-            marker=dict(size=4, color=line_color),
-            hovertemplate="%{x|%b %Y}  Value: <b>₱%{y:,.1f}</b><extra></extra>",
+            line=dict(color=theme["line"], width=2.5),
+            marker=dict(size=4, color=theme["line"],
+                        line=dict(width=1, color="#ffffff")),
+            hovertemplate="%{x|%b %Y}<br>Value: <b>₱%{y:,.2f}</b><extra></extra>",
         ),
         secondary_y=False,
     )
 
-    # Keep Scatter on top layer
+    # Ensure bars render below the line
     bars  = [t for t in fig.data if t.type == "bar"]
     lines = [t for t in fig.data if t.type == "scatter"]
     fig.data = tuple(bars + lines)
+
+    # Shared axis style (explicit colours so dark-mode can't override)
+    _ax = dict(
+        ticks="outside",
+        tickcolor="#94a3b8",
+        tickfont=dict(color="#374151", size=11, family="Inter, system-ui, sans-serif"),
+        title_font=dict(color="#374151", size=12, family="Inter, system-ui, sans-serif"),
+        linecolor="#e2e8f0",
+        showline=True,
+        zeroline=False,
+    )
 
     fig.update_yaxes(
         title_text="Value (₱)",
         secondary_y=False,
         range=[0, b_max],
         tickvals=b_vals, ticktext=b_text,
-        ticks="outside", showgrid=True,
-        gridcolor="#f0f4f8",
+        showgrid=True, gridcolor=theme["grid"], gridwidth=1,
+        **_ax,
     )
     fig.update_yaxes(
         title_text="Volume",
         secondary_y=True,
         range=[0, v_max],
         tickvals=v_vals, ticktext=v_text,
-        ticks="outside", showgrid=False,
+        showgrid=False,
+        **_ax,
     )
-    fig.update_xaxes(showgrid=False)
+    fig.update_xaxes(
+        showgrid=False,
+        tickformat="%b %Y",
+        tickangle=-30,
+        tickfont=dict(color="#374151", size=10),
+        linecolor="#e2e8f0",
+        showline=True,
+        ticks="outside",
+        tickcolor="#94a3b8",
+    )
     fig.update_layout(
         hovermode="x unified",
         barmode="overlay",
+        height=440,
         plot_bgcolor="#ffffff",
         paper_bgcolor="#ffffff",
-        margin=dict(l=10, r=10, t=30, b=10),
+        margin=dict(l=10, r=10, t=16, b=10),
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.01,
-            xanchor="right", x=1, bgcolor="rgba(0,0,0,0)",
+            orientation="h",
+            yanchor="bottom", y=1.02,
+            xanchor="right",  x=1,
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="#e2e8f0", borderwidth=1,
+            font=dict(color="#374151", size=12),
         ),
-        font=dict(family="Inter, sans-serif", size=12),
+        font=dict(family="Inter, system-ui, sans-serif", color="#374151", size=12),
+        hoverlabel=dict(
+            bgcolor="#1e293b", bordercolor="#334155",
+            font=dict(color="#f8fafc", size=12),
+        ),
     )
     return fig
 

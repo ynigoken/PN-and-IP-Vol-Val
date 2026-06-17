@@ -57,95 +57,65 @@ CACHE_DIR = Path(__file__).parent / ".cache"
 # bleed into main-content widget colours.
 # ─────────────────────────────────────────────
 def _inject_css() -> None:
+    # .streamlit/config.toml pins base="light", so all rules here are
+    # purely additive polish — we never need to fight dark-mode.
     st.markdown(
         """
         <style>
-        /* ════════════════════════════════════════
-           MAIN CANVAS — always light
-           ════════════════════════════════════════ */
-        [data-testid="stAppViewContainer"] > .main {
-            background-color: #f8fafc;
-        }
-        /* Force all main-content text to dark so it
-           reads on the light canvas regardless of the
-           user's OS dark-mode setting */
-        [data-testid="stAppViewContainer"] > .main,
-        [data-testid="stAppViewContainer"] > .main p,
-        [data-testid="stAppViewContainer"] > .main span,
-        [data-testid="stAppViewContainer"] > .main h1,
-        [data-testid="stAppViewContainer"] > .main h2,
-        [data-testid="stAppViewContainer"] > .main h3,
-        [data-testid="stAppViewContainer"] > .main h4,
-        [data-testid="stAppViewContainer"] > .main label {
-            color: #1e293b;
-        }
-
-        /* ════════════════════════════════════════
-           SIDEBAR — dark navy, scoped tightly
-           ════════════════════════════════════════ */
+        /* SIDEBAR — dark navy gradient
+           Only targets known text containers so widget internals
+           are never broken by a blanket colour override. */
         [data-testid="stSidebar"] > div:first-child {
-            background: linear-gradient(180deg, #0f2044 0%, #1a3560 100%);
+            background: linear-gradient(180deg, #0f2044 0%, #1e3a6e 100%);
         }
-        /* Only colour direct text nodes inside the sidebar;
-           do NOT use a bare * selector — that would nuke
-           Streamlit's internal widget colour tokens */
-        [data-testid="stSidebar"] p,
-        [data-testid="stSidebar"] span,
-        [data-testid="stSidebar"] label,
-        [data-testid="stSidebar"] div.stMarkdown,
-        [data-testid="stSidebar"] div.stRadio > label,
-        [data-testid="stSidebar"] .stSelectbox label,
-        [data-testid="stSidebar"] .stSlider label {
+        [data-testid="stSidebar"] .stMarkdown p,
+        [data-testid="stSidebar"] .stMarkdown span,
+        [data-testid="stSidebar"] .stMarkdown a,
+        [data-testid="stSidebar"] .stMarkdown b,
+        [data-testid="stSidebar"] .stMarkdown h3,
+        [data-testid="stSidebar"] .stRadio > label > div > p,
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p {
             color: #dce8f5 !important;
+        }
+        [data-testid="stSidebar"] .stRadio [data-testid="stMarkdownContainer"] p {
+            color: #dce8f5 !important;
+            font-weight: 600;
         }
         [data-testid="stSidebar"] hr {
             border-color: #2e4d7b !important;
         }
-        /* Slider track */
-        [data-testid="stSidebar"] [data-testid="stSlider"] div[data-baseweb="slider"] div {
-            background: #3b6abf;
-        }
 
-        /* ════════════════════════════════════════
-           METRIC CARDS
-           ════════════════════════════════════════ */
+        /* METRIC CARDS — white card on light bg = guaranteed contrast */
         [data-testid="stMetric"] {
             background: #ffffff;
             border: 1px solid #e2e8f0;
             border-radius: 10px;
             padding: 14px 18px 10px;
-            box-shadow: 0 1px 3px rgba(0,0,0,.07);
+            box-shadow: 0 1px 4px rgba(0,0,0,.06);
         }
-        /* Label row — muted grey */
-        [data-testid="stMetricLabel"] > div {
-            color: #64748b !important;
+        [data-testid="stMetricLabel"] p {
             font-size: .78rem !important;
+            color: #64748b !important;
         }
-        /* Value row — prominent dark */
-        [data-testid="stMetricValue"] > div {
-            color: #0f172a !important;
+        [data-testid="stMetricValue"] {
             font-size: 1.5rem !important;
             font-weight: 700 !important;
+            color: #0f172a !important;
         }
-        /* Delta row colours preserved (green/red) */
         [data-testid="stMetricDelta"] svg { display: none; }
 
-        /* ════════════════════════════════════════
-           TABS
-           ════════════════════════════════════════ */
-        [data-testid="stTabs"] [role="tab"] {
-            font-weight: 600;
-            font-size: .88rem;
-            color: #475569;
-        }
-        [data-testid="stTabs"] [aria-selected="true"] {
-            color: #0f172a !important;
-            border-bottom-color: #3b6abf !important;
+        /* TABS */
+        button[role="tab"] { font-weight: 600; font-size: .88rem; }
+
+        /* SECTION HEADINGS (####) */
+        .stMarkdown h4 {
+            color: #1e293b !important;
+            font-weight: 700;
+            margin-top: 1rem;
+            margin-bottom: .25rem;
         }
 
-        /* ════════════════════════════════════════
-           DOWNLOAD BUTTONS
-           ════════════════════════════════════════ */
+        /* DOWNLOAD BUTTONS */
         [data-testid="stDownloadButton"] > button {
             background: #f1f5f9 !important;
             border: 1px solid #cbd5e1 !important;
@@ -153,11 +123,6 @@ def _inject_css() -> None:
             border-radius: 6px;
             font-size: .82rem;
         }
-
-        /* ════════════════════════════════════════
-           DIVIDER
-           ════════════════════════════════════════ */
-        hr { margin: .5rem 0 !important; border-color: #e2e8f0 !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -773,16 +738,22 @@ sel_start = df["Period"].min().strftime("%b %Y")
 sel_end   = df["Period"].max().strftime("%b %Y")
 range_label = sel_start if sel_start == sel_end else f"{sel_start} – {sel_end}"
 
+# White card ensures the heading text is ALWAYS dark-on-white,
+# regardless of the surrounding canvas colour.
 st.markdown(
     f"""
-    <div style="border-left: 5px solid {accent};
-                padding: 6px 0 6px 16px; margin-bottom: 4px;">
-        <h1 style="margin:0; font-size:1.8rem; font-weight:800; color:#0f172a;">
+    <div style="background:#ffffff; border-left:6px solid {accent};
+                border-radius:0 8px 8px 0; padding:14px 20px 12px 18px;
+                margin-bottom:6px; box-shadow:0 1px 4px rgba(0,0,0,.07);">
+        <div style="font-size:1.75rem; font-weight:800;
+                    color:#0f172a; line-height:1.2;">
             {series} Volume &amp; Value
-        </h1>
-        <p style="margin:2px 0 0 0; font-size:.85rem; color:#64748b;">
-            {SOURCE_LABEL[series]} &nbsp;|&nbsp; Showing: <b>{range_label}</b>
-        </p>
+        </div>
+        <div style="margin-top:5px; font-size:.85rem; color:#475569;">
+            {SOURCE_LABEL[series]}
+            &nbsp;<span style="color:#cbd5e1;">|</span>&nbsp;
+            Showing:&nbsp;<b style="color:#1e293b;">{range_label}</b>
+        </div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -824,7 +795,7 @@ if not a_agg.empty:
         a_val_yoy = _safe_pct(a_val, pa["Value"])
 
 # Row 1 — Selected range summary (2 wide cols)
-st.markdown("#### Selected Period")
+st.markdown("#### Selected Period", unsafe_allow_html=False)
 r1c1, r1c2 = st.columns(2)
 r1c1.metric(
     f"Total Volume  ({range_label})",
@@ -837,7 +808,12 @@ r1c2.metric(
     help="Sum of transaction value (₱) in the filtered month range.",
 )
 
-st.markdown("#### Year-to-Month  " + f"<span style='font-size:.8rem;color:#64748b;'>({latest_period.strftime('%b %Y')})</span>", unsafe_allow_html=True)
+st.markdown(
+    f"#### Year-to-Month "
+    f"<span style='font-size:.82rem; color:#475569; font-weight:400;'>"
+    f"({latest_period.strftime('%b %Y')})</span>",
+    unsafe_allow_html=True,
+)
 r2c1, r2c2, r2c3 = st.columns(3)
 r2c1.metric(
     "YTM Volume",
@@ -856,7 +832,7 @@ r2c3.metric(
     help=f"Jan–{prev_ref.strftime('%b %Y')} baseline.",
 )
 
-st.markdown("#### Latest Quarter & Year")
+st.markdown("#### Latest Quarter & Year", unsafe_allow_html=False)
 r3c1, r3c2, r3c3, r3c4 = st.columns(4)
 r3c1.metric(
     f"Q Volume  ({q_agg.iloc[-1]['YearQ'] if not q_agg.empty else '—'})",
@@ -898,9 +874,12 @@ st.divider()
 # CHART  (AMENDMENT 8 — title via st.markdown)
 # ─────────────────────────────────────────────
 st.markdown(
-    f"#### Monthly Trend — {series}"
-    f"<span style='font-size:.8rem; color:#64748b; margin-left:10px;'>"
-    f"Bar = Volume (right axis) · Line = Value ₱ (left axis)</span>",
+    f"<div style='margin-bottom:4px;'>"
+    f"<span style='font-size:1.1rem; font-weight:700; color:#1e293b;'>"
+    f"Monthly Trend &#8212; {series}</span>"
+    f"<span style='font-size:.78rem; color:#64748b; margin-left:10px;'>"
+    f"Bar = Volume (right axis) &nbsp;&middot;&nbsp; Line = Value &#8377; (left axis)"
+    f"</span></div>",
     unsafe_allow_html=True,
 )
 
@@ -1000,15 +979,18 @@ with tab_ytm:
 st.divider()
 st.markdown(
     f"""
-    <div style="font-size:.75rem; color:#94a3b8; text-align:center; padding:8px 0 16px;">
+    <div style="font-size:.75rem; color:#64748b; text-align:center;
+                padding:10px 0 16px; border-top:1px solid #e2e8f0;">
         Data sourced from the
         <a href="https://www.bsp.gov.ph" target="_blank"
-           style="color:#60a5fa;">Bangko Sentral ng Pilipinas (BSP)</a>
-        &nbsp;·&nbsp;
-        <a href="{SOURCES['PESONet']}" target="_blank" style="color:#60a5fa;">PESONet XLSX</a>
-        &nbsp;·&nbsp;
-        <a href="{SOURCES['InstaPay']}" target="_blank" style="color:#60a5fa;">InstaPay XLSX</a>
-        &nbsp;·&nbsp; Refreshed hourly
+           style="color:#2563eb;">Bangko Sentral ng Pilipinas (BSP)</a>
+        &nbsp;&middot;&nbsp;
+        <a href="{SOURCES['PESONet']}" target="_blank"
+           style="color:#2563eb;">PESONet XLSX</a>
+        &nbsp;&middot;&nbsp;
+        <a href="{SOURCES['InstaPay']}" target="_blank"
+           style="color:#2563eb;">InstaPay XLSX</a>
+        &nbsp;&middot;&nbsp; Cached hourly
     </div>
     """,
     unsafe_allow_html=True,
